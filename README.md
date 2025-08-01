@@ -1,6 +1,7 @@
 # WF_GoNogo
 A pipeline for analyzing widefield calcium imaging data from mice performing a interhemispheric Go/No-go visual task. This repository includes analysis of behavioral performance, pupil dynamics, locomotion speed, widefield imaging data, and licking behavior.
 ## Project Structure
+```plaintext
 WF_GoNogo/
 ├── mouse_data/               # Symbolic links or pointers to organized raw data (do not store raw here)
 │   ├── Mouse01/
@@ -38,6 +39,7 @@ WF_GoNogo/
 ├── run_all.py                # One-click pipeline execution script
 ├── requirements.txt          # Python dependencies
 └── README.md                 # Project description and usage
+```
 ## Dependencies
 Install required Python packages:
 
