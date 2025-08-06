@@ -67,12 +67,19 @@ def write_lick_excel(sheets_dict, session_labels, save_path):
             except Exception as e:
                 print(f"Error writing sheet {label}: {e}")
 
-def process_behavior_mouse(base_dir, mouse_id, sessions=None):
+def process_behavior_mouse_from_yaml(config_path):
+    # 读取配置
+    cfg = load_config(config_path)
+    
+    base_dir = cfg['base_dir']
+    mouse_id = cfg['mouse_id']
+    sessions = cfg.get('sessions', None)  # sessions可能不存在，默认None
+    
+    # 这里调用你已有的函数 load_bpod_mat_files
     mat_files, directory_path = load_bpod_mat_files(base_dir, mouse_id, sessions)
     if not mat_files:
         print(f'No .mat files found in {directory_path}')
         return
-
 
     results_per_session = []
     session_labels = []
@@ -90,11 +97,11 @@ def process_behavior_mouse(base_dir, mouse_id, sessions=None):
         for key in ['HIT', 'MISS', 'FA', 'CR']:
             all_sheets[key].append(pad_nested_list(sheets[key]))
 
-    # Write trial_results.csv
+    # 写入 trial_results.csv
     save_csv_path = os.path.join(directory_path, 'trial_results.csv')
     write_trial_result_csv(results_per_session, session_labels, save_csv_path)
 
-    # Write Excel files for each outcome type
+    # 写入 Excel 文件
     for key in ['HIT', 'MISS', 'FA', 'CR']:
         save_xlsx = os.path.join(directory_path, f'when_lick_{key.lower()}_ALL.xlsx')
         write_lick_excel(all_sheets[key], session_labels, save_xlsx)
