@@ -119,6 +119,224 @@ def plot_metric_across_days(cfg, metric='dprime', save_dir=None):
     print(f"[✔] 图像已保存至: {save_path}")
     plt.show()
 
+def plot_go_nogo_lick_raster_by_yaml_config(config):
+    mouse_id = config['mouse_id']
+    base_dir = config['base_dir']
+    sessions = config['sessions']  # list of date strings, e.g. ['20250729', '20250730', ...]
+  
+    # 拼接hdf5路径，假设文件名格式是 {mouse_id}_discrimination_data.h5，且都在results文件夹
+    hdf5_path = os.path.join(base_dir, mouse_id, 'results', f"{mouse_id}_discrimination_data.h5")
+    
+    save_dir = os.path.join(base_dir, mouse_id, 'figures')
+    os.makedirs(save_dir, exist_ok=True)
+
+    trial_setting = [0, 1.25, 2.25, 4.25, 5.25, 9.75]  
+
+    case_color = {1: 'green', 2: 'lightcoral', 3: 'red', 4: 'lightgreen'}
+    case_color_2 = {1: 'lightgray', 2: 'lightcoral', 3: 'lightgray', 4: 'lightgreen'}
+    case_keys = {'Go': ['Hit', 'Miss'], 'NoGo': ['FA', 'CR']}
+    case_labels = {'Hit': 1, 'Miss': 2, 'FA': 3, 'CR': 4}
+
+    def pad_to_same_width(arrays):
+        max_cols = max(a.shape[1] for a in arrays)
+        return [np.pad(a, ((0, 0), (0, max_cols - a.shape[1])), constant_values=np.nan) for a in arrays]
+
+    with h5py.File(hdf5_path, 'r') as f:
+        # mouse_id = f.attrs['mouse_id']
+        root = f['training_records']
+
+        for date in sessions:
+            if date not in root:
+                print(f"{date} not found in file, skipping")
+                continue
+
+            date_group = root[date]
+            go_trials, nogo_trials = [], []
+            go_breaks, nogo_breaks = [], []
+
+            for session_name in sorted(date_group.keys()):
+                session_group = date_group[session_name]
+
+                go_session_trials = []
+                nogo_session_trials = []
+
+                for case in ['Hit', 'Miss', 'FA', 'CR']:
+                    case_key = f"{case}_licks"
+                    if case_key not in session_group:
+                        continue
+
+                    raw = session_group[case_key][()]
+                    trial_indices = raw[:, [0]]
+                    timestamps = raw[:, 1:]
+                    n_trials = raw.shape[0]
+
+                    labels = np.full((n_trials, 1), case_labels[case])
+                    data = np.hstack([labels, trial_indices, timestamps])
+
+                    if case in case_keys['Go']:
+                        go_session_trials.append(data)
+                    else:
+                        nogo_session_trials.append(data)
+
+                if go_session_trials:
+                    go_combined = np.vstack(pad_to_same_width(go_session_trials))
+                    go_combined = go_combined[np.argsort(go_combined[:, 1])]
+                    go_trials.append(go_combined)
+                    go_breaks.append(go_combined.shape[0])
+                if nogo_session_trials:
+                    nogo_combined = np.vstack(pad_to_same_width(nogo_session_trials))
+                    nogo_combined = nogo_combined[np.argsort(nogo_combined[:, 1])]
+                    nogo_trials.append(nogo_combined)
+                    nogo_breaks.append(nogo_combined.shape[0])
+
+            def process_trials(trial_list, breaks):
+                if not trial_list:
+                    return None, []
+                full = np.vstack(pad_to_same_width(trial_list))
+                trial_rows = []
+                current_trial = 0
+                for row in full:
+                    trial_type = int(row[0])
+                    timestamps = row[2:][~np.isnan(row[2:])]
+                    trial_rows.append((trial_type, current_trial, timestamps))
+                    current_trial += 1
+                session_lines = np.cumsum(breaks)[:-1]
+                return trial_rows, session_lines
+
+            go_data, go_lines = process_trials(go_trials, go_breaks)
+            nogo_data, nogo_lines = process_trials(nogo_trials, nogo_breaks)
+
+            # 绘图
+            fig, axes = plt.subplots(2, 1, figsize=(20, 30), sharex=True)
+            for idx, (label, data, lines) in enumerate([("Go Trials", go_data, go_lines), ("No-Go Trials", nogo_data, nogo_lines)]):
+                ax = axes[idx]
+                if data:
+                    for trial_type, trial_idx, timestamps in data:
+                        ax.hlines(trial_idx, 0, 10, color=case_color_2[trial_type], linewidth=0.8, zorder=0)
+                        ax.vlines(timestamps, trial_idx - 0.6, trial_idx + 0.6, color=case_color[trial_type], linewidth=1, zorder=1)
+                    for line_y in lines:
+                        ax.axhline(line_y - 0.5, color='blue', linestyle='--', linewidth=1.5)
+                ax.axvspan(trial_setting[1], trial_setting[2], color='grey', alpha=0.3)
+                ax.axvspan(trial_setting[2], trial_setting[3], color='orange', alpha=0.3)
+                ax.set_ylim(-1, len(data) if data else 1)
+                ax.set_xlim(0, 10)
+                ax.set_title(f"{date} - {label}", fontsize=24)
+                ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+                ax.yaxis.set_major_locator(ticker.MultipleLocator(50))
+                ax.tick_params(axis='x', labelsize=18)
+                ax.tick_params(axis='y', labelsize=18)
+                ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+
+            plt.tight_layout()
+            timestamp = datetime.now().strftime('%Y%m%d')
+            save_path = os.path.join(save_dir, f"{mouse_id}_raster_{date}_{timestamp}.png")
+            plt.savefig(save_path, dpi=300)
+            plt.show()
+            print(f"{date} 图像已保存至: {save_path}")
+
+def plot_hit_fa_scatter_from_yaml(config):
+    mouse_id = config['mouse_id']
+    base_dir = config['base_dir']
+    date_list = config['sessions']
+    save_dir = config.get('save_dir', None)
+
+    # 拼接hdf5路径，假设文件名格式是 {mouse_id}_discrimination_data.h5，且在results文件夹
+    hdf5_path = os.path.join(base_dir, mouse_id, 'results', f"{mouse_id}_discrimination_data.h5")
+    if not os.path.exists(hdf5_path):
+        raise FileNotFoundError(f"HDF5 file not found: {hdf5_path}")
+
+    if save_dir is None:
+        save_dir = os.path.join(base_dir, mouse_id, 'figures')
+    os.makedirs(save_dir, exist_ok=True)
+
+    with h5py.File(hdf5_path, 'r') as f:
+        if 'training_history' in f:
+            training_history_0 = f['training_history'][()]
+            training_history = training_history_0.astype(str)
+            history_dict = {row[0]: row[1] for row in training_history}
+        else:
+            print("[⚠️] HDF5 中无 training_history，跳过历史事件绘制")
+            history_dict = {}
+
+
+    day_starts = []
+    history_lines = []
+
+    plt.figure(figsize=(72, 3))
+
+    color_map = {
+        4.0: ('olive', 'Hit'),
+        3.0: ('pink', 'Miss'),
+        2.0: ('magenta', 'FA'),
+        1.0: ('lightgreen', 'CR'),
+    }
+    
+    for day_index, date_str in enumerate(date_list):
+        all_trials = []
+        with h5py.File(hdf5_path, 'r') as f:
+            if 'training_records' not in f:
+                raise ValueError("HDF5 中不包含 'training_records' 组")
+            
+            record_group = f['training_records']
+            if date_str not in record_group:
+                print(f"[⚠️] 日期 `{date_str}` 不在 `training_records` 中，跳过")
+                continue
+
+            date_group = record_group[date_str]
+            sessions = sorted(date_group.keys())
+
+            for sess_key in sessions:
+                trial_result = date_group[sess_key]["trial_results"][:]*(-1)+5
+                all_trials.append(trial_result)
+
+        trial_seq = np.concatenate(all_trials)
+
+        try:
+            x = [day_index * 300 + i for i in range(len(trial_seq))]
+
+            for val, (color, label) in color_map.items():
+                indices = np.where(trial_seq == val)[0]
+                if len(indices) == 0:
+                    continue
+                plt.scatter(np.array(x)[indices], trial_seq[indices], color=color, label=label, s=10)
+
+            day_starts.append((x[0], trial_seq[0], date_str))
+            if history_dict:
+                date_formatted = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                if date_formatted in history_dict:
+                    history_lines.append((x[0], history_dict[date_formatted]))
+
+        except Exception as e:
+            print(f"[⚠️] 跳过 {date_str}: {e}")
+            continue
+
+    for x0, trial_seq0, date_str in day_starts:
+        plt.scatter(x0, trial_seq0, color='blue', s=50, zorder=5)
+    if history_dict:
+        line_colors = ['orange', 'purple', 'blue', 'brown']
+        for i, (x_line, label) in enumerate(history_lines):
+            color = line_colors[i % len(line_colors)]
+            plt.axvline(x_line, linestyle='--', color=color, alpha=0.6, label=label)
+
+    plt.title(f"{mouse_id} trial results over days", fontsize=14)
+    plt.xlabel("Training Trials", fontsize=12)
+    plt.ylabel("Result", fontsize=12)
+    plt.ylim(0, 5)
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(), loc='center left', bbox_to_anchor=(1.02, 0.8), borderaxespad=0)
+
+    plt.grid(alpha=0.4)
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
+
+    timestamp = datetime.now().strftime("%Y%m%d")
+    save_path = os.path.join(save_dir, f"{mouse_id}_training_results_{timestamp}.png")
+    plt.savefig(save_path, dpi=300)
+    print(f"[✔] 图像已保存至: {save_path}")
+    plt.show()
+
+
 def plot_dprime_across_days(hdf5_path, date_list, save_dir=None):
     with h5py.File(hdf5_path, 'r') as f:
         training_history_0 = f['training_history'][()]
