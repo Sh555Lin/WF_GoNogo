@@ -5,17 +5,17 @@ A pipeline for analyzing widefield calcium imaging data from mice performing a i
 WF_GoNogo/
 ├── mouse_data/               # Symbolic links or pointers to organized raw data (do not store raw here)
 │   ├── Mouse01/
-│   │   ├── behavior/         # Behavioral CSVs or raw logs
-│   │   ├── pupil/            # Pupil videos or tracking results
+│   │   ├── behavior/         # Behavioral CSVs 
+│   │   ├── pupil/            # Pupil videos 
 │   │   └── wf/               # Widefield imaging data
 │   ├── Mouse02/
 │   │   └── ...
 │   └── ...
 │
 ├── analysis/                 # Main analysis scripts
-│   ├── run_behavior.py
-│   ├── run_pupil.py
-│   ├── run_wf.py
+│   ├── run_behavior.ipynb
+│   ├── run_pupil.ipynb
+│   ├── run_wf.ipynb
 │   └── combine_results.py    # Optional: merge multi-modal outputs
 │
 ├── utils/                    # Helper functions and shared code
@@ -36,7 +36,6 @@ WF_GoNogo/
 ├── figures/                  # Final figures for publications or QC
 │   └── ...
 │
-├── run_all.py                # One-click pipeline execution script
 ├── requirements.txt          # Python dependencies
 └── README.md                 # Project description and usage
 ```
@@ -50,30 +49,18 @@ pip install -r requirements.txt
 1. Organize data
 Ensure your data follows this symbolic structure under mouse_data/. Each mouse folder should include:
 - behavior/ – behavioral results in CSV format
-- pupil/ – pupil video or tracking results (e.g., DeepLabCut outputs)
-- wf/ – widefield imaging files (e.g., TIFFs, NumPy arrays, etc.)
+- pupil/ – pupil video 
+- wf/ – widefield imaging files
 2. Configure settings
 Create a YAML file under config/ for each mouse/session. A typical file might define:
 ```yaml
-mouse_id: Mouse01
-session_id: 2025-08-01
-frame_rate: 20
-stim_timestamps_csv: behavior/stimulus_times.csv
-wf_data_path: wf/session1.npy
-pupil_video_path: pupil/pupil_cam1.avi
-output_dir: results/Mouse01/session1/
+mouse_id: A092
+birth_date: '2025-05-12'
+base_dir: /home/lsh/Data_attention/Transfer learning/DATA_linshu
+sessions:               
+  - '20250729'
+  - '20250730'
+  - '20250731'
+  - '20250801'
 ```
 3. Run pipeline
-Run each modality step-by-step or use the wrapper:
-```bash
-python run_all.py --config config/Mouse01_config.yaml
-```
-Or run each module:
-
-```bash
-python analysis/run_behavior.py --config config/Mouse01_config.yaml
-python analysis/run_pupil.py --config config/Mouse01_config.yaml
-python analysis/run_wf.py --config config/Mouse01_config.yaml
-```
-4. View results
-Processed data and intermediate outputs will be saved in the results/ directory. Final figures can be saved in figures/.
