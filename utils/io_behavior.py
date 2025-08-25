@@ -118,3 +118,60 @@ def write_trial_results_to_hdf5_from_cfg(cfg):
                 sess_grp.create_dataset(f"{outcome}_licks", data=padded)
                 print(f"{outcome}_licks...done")
     print("训练记录写入成功！")
+
+
+def write_trial_daily_results_to_hdf5_from_cfg(cfg):
+    """
+    从 config 中构建路径并写入 trial_results 和 lick_times 到 HDF5 文件。
+    - 每天一个 h5 文件
+    - 每个文件内是 trial_0, trial_1, ...，每个 trial 下有 trial_results 和 lick_times
+    """
+    h5_base_dir, trial_result_path, lick_paths = build_paths(cfg)
+
+    # 读 trial_results
+    trial_df = pd.read_csv(trial_result_path, header=None, index_col=0)
+    trial_df.index = trial_df.index.astype(str)
+    trial_df = trial_df.sort_index()
+
+    # 读 lick data
+    lick_data = {label: load_lick_sheets(path) for label, path in lick_paths.items()}
+
+    # 遍历每个 session（一天）
+    for session_key, row in trial_df.iterrows():
+        date_key = session_key.split('_')[0]  # e.g. "20250729"
+
+        # 输出路径：每天一个 h5
+        h5_path = os.path.join(h5_base_dir, f"{cfg['mouse_id']}_{date_key}.h5")
+
+        # trial_results: 去掉 NaN
+        trial_results = row.values.astype("float")
+        last_valid_index = np.where(~np.isnan(trial_results))[0][-1]
+        trial_results = trial_results[:last_valid_index]
+
+        # 找到该 session 对应的 lick 数据 (合并4类lick)
+        lick_times_all = []
+        for outcome in ["Hit", "Miss", "CR", "FA"]:
+            ts_array = lick_data[outcome].get(session_key, [])
+            for lick_trial in ts_array:
+                lick_trial_clean = lick_trial[~pd.isnull(lick_trial)].astype("float32")
+                lick_times_all.append(lick_trial_clean)
+
+        # 打开/新建 h5 文件，写入 trial 数据
+        with h5py.File(h5_path, "a") as f:
+            for i, res in enumerate(trial_results):
+                trial_key = f"trial_{i}"
+                if trial_key in f:
+                    del f[trial_key]
+                g = f.create_group(trial_key)
+
+                g.create_dataset("trial_results", data=res)
+
+                if i < len(lick_times_all):
+                    g.create_dataset("lick_times", data=lick_times_all[i])
+                else:
+                    g.create_dataset("lick_times", shape=(0,), dtype="float32")
+
+        print(f"✅ {session_key}: {len(trial_results)} trials saved to {h5_path}")
+
+    print("🎉 所有 session 写入完成！")
+
