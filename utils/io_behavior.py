@@ -42,7 +42,7 @@ def build_paths(cfg):
     lick_paths = {label: os.path.join(base_data_dir, mouse_id, f'when_lick_{label}_ALL.xlsx')
                   for label in lick_labels}
 
-    return h5_path, trial_result_csv, lick_paths
+    return results_dir, h5_path, trial_result_csv, lick_paths
 
 
 def load_lick_sheets(path):
@@ -126,7 +126,7 @@ def write_trial_daily_results_to_hdf5_from_cfg(cfg):
     - 每天一个 h5 文件
     - 每个文件内是 trial_0, trial_1, ...，每个 trial 下有 trial_results 和 lick_times
     """
-    h5_base_dir, trial_result_path, lick_paths = build_paths(cfg)
+    results_dir,h5_base_dir, trial_result_path, lick_paths = build_paths(cfg)
 
     # 读 trial_results
     trial_df = pd.read_csv(trial_result_path, header=None, index_col=0)
@@ -139,9 +139,9 @@ def write_trial_daily_results_to_hdf5_from_cfg(cfg):
     # 遍历每个 session（一天）
     for session_key, row in trial_df.iterrows():
         date_key = session_key.split('_')[0]  # e.g. "20250729"
-
+        
         # 输出路径：每天一个 h5
-        h5_path = os.path.join(h5_base_dir, f"{cfg['mouse_id']}_{date_key}.h5")
+        h5_path = os.path.join(results_dir, f"{cfg['mouse_id']}_{date_key}.h5")
 
         # trial_results: 去掉 NaN
         trial_results = row.values.astype("float")
