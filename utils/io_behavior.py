@@ -56,7 +56,7 @@ def write_trial_results_to_hdf5_from_cfg(cfg):
     参数：
         - cfg: dict, 包含 base_data_dir、base_analysis_dir、mouse_id、mode
     """
-    h5_path, trial_result_path, lick_paths = build_paths(cfg)
+    results_dir, h5_path, trial_result_path, lick_paths = build_paths(cfg)
 
     trial_df = pd.read_csv(trial_result_path, header=None, index_col=0)
     trial_df.index = trial_df.index.astype(str)
