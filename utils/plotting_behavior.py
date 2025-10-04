@@ -109,7 +109,7 @@ def plot_metric_across_days(cfg, metric='dprime', save_dir=None):
         plt.ylim(0, 1.1)
     if metric == 'accuracy':
         plt.ylim(0.3, 1)
-    plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.8), borderaxespad=0)
+    # plt.legend(loc='center left', bbox_to_anchor=(1.02, 0.8), borderaxespad=0)
     plt.grid(alpha=0.3)
     plt.tight_layout(rect=[0, 0, 0.85, 1])
 
