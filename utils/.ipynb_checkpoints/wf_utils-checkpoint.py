@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import scipy
+import yaml
+from PIL import Image, ImageDraw, ImageFont
 
 def cal_base(x, n_bins=10, thr=1/3):
     """
@@ -387,3 +389,171 @@ def show_one_image(image: np.ndarray, cmap='gray', colorbar=False,
     ax.grid() if grid else None
     plt.colorbar(cb, shrink=0.8) if colorbar else None
     plt.show() if 'ax' not in kwargs else None
+    
+    
+def load_config(config_path):
+    """load the YAML config"""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
+
+def preprocess_mice(config_path):
+    config = load_config(config_path)
+    for session in config["sessions"]:
+        load_timelite(config, session)
+    print(f"all done")
+    
+def find_closest_indices(x, y):
+    """
+    For each element in y, find the index in x with the closest value.
+    
+    Parameters:
+    x: numpy array of size n
+    y: numpy array of size m (m < n)
+    
+    Returns:
+    numpy array of indices in x (size m)
+    """
+    indices = []
+    
+    for value in y:
+        # Calculate absolute differences
+        differences = np.abs(x - value)
+        # Find index of minimum difference
+        closest_idx = np.argmin(differences)
+        indices.append(closest_idx)
+    
+    return np.array(indices)
+
+
+def add_trial_text_clean(image_array, trial_num, status="on"):
+    """
+    Add text without affecting other bright pixels.
+    
+    Parameters:
+    image_array: (512, 512) uint16 array
+    trial_num: int in [1, 500]
+    status: "on" or "off"
+    
+    Returns:
+    (512, 512) uint16 array with clean text overlay
+    """
+    # Validate inputs
+    if not 1 <= trial_num <= 500:
+        raise ValueError("trial_num must be between 1 and 500")
+    if status not in ["on", "off"]:
+        raise ValueError("status must be 'on' or 'off'")
+    
+    text = f"trial {trial_num} {status}"
+    result = image_array.copy()
+    
+    # Convert to PIL (16-bit)
+    pil_image = Image.fromarray(result, mode='I;16')
+    
+    # Create a completely black image for text mask
+    black_image = Image.new('L', (512, 512), 0)
+    draw_black = ImageDraw.Draw(black_image)
+    
+    # Create a completely white image for text mask
+    white_image = Image.new('L', (512, 512), 255)
+    draw_white = ImageDraw.Draw(white_image)
+    
+    # Try to load font
+    try:
+        font = ImageFont.truetype("arial.ttf", 30)
+    except:
+        font = ImageFont.load_default()
+    
+    # Draw text on both images
+    position = (10, 10)
+    draw_black.text(position, text, fill=255, font=font)  # White text on black
+    draw_white.text(position, text, fill=0, font=font)    # Black text on white
+    
+    # Convert to numpy arrays
+    black_array = np.array(black_image)
+    white_array = np.array(white_image)
+    
+    # Get exact text mask: pixels that are white in black image AND black in white image
+    text_mask = (black_array == 255) & (white_array == 0)
+    
+    # Apply text to original image (set to max 16-bit value)
+    result[text_mask] = 65535
+    
+    return result
+
+
+def load_trial_type(rawPath, timePath):
+    """
+    从指定路径的日志文件中读取 trial_type 信息，并保存为 .npy 文件到 timePath。
+
+    参数:
+        rawPath (str): 存放 log 文件的文件夹路径。
+        timePath (str): 保存输出 .npy 文件的目标路径。
+
+    返回:
+        list[int]: trial_type 列表
+    """
+    # 匹配路径下的 log 文件
+    txt_path = glob(pjoin(rawPath, '*log_*.txt'))
+    if not txt_path:
+        raise FileNotFoundError(f"未在路径 {rawPath} 下找到匹配的 log 文件。")
+
+    trial_type = None
+    # 打开第一个匹配的文件
+    with open(txt_path[0], 'r') as f:
+        for line in f:
+            if line.startswith("Data:"):
+                values = line.split(":", 1)[1].strip()
+                values = values.strip("[]")
+                trial_type = [int(x) for x in values.split()]
+                break
+
+    if trial_type is None:
+        raise ValueError(f"文件 {txt_path[0]} 中未找到以 'Data:' 开头的行。")
+
+    # 确保保存目录存在
+    os.makedirs(timePath, exist_ok=True)
+
+    # 保存为 .npy 文件
+    base_name = os.path.splitext(os.path.basename(txt_path[0]))[0]
+    save_path = pjoin(timePath, f"trial_type.npy")
+    np.save(save_path, np.array(trial_type))
+
+    print(f"trial_type 已保存到 {save_path}")
+    return trial_type
+
+
+def compute_trial_mean(dff, idx_onset, idx_offset):
+    """
+    Vectorized version using padding for speed.
+    """
+    
+    # Calculate trial lengths
+    trial_lengths = idx_offset - idx_onset
+    
+    # Find the two possible lengths
+    unique_lengths = np.unique(trial_lengths)
+    
+    # Choose the shorter length
+    n_frames= np.min(unique_lengths)
+    print(n_frames)
+    n_trials = len(idx_onset)
+
+    _, x, y = dff.shape
+    
+    # Pre-allocate array for all trials
+    # Shape: [n_trials, n_frames, x, y]
+    all_trials = np.full((n_trials, n_frames, x, y), np.nan, dtype=np.float32)
+    
+    # Extract and pad each trial
+    for i in tqdm(range(n_trials)):
+        start = idx_onset[i]
+        end = start+n_frames
+        print(start)
+        trial_data = dff[start:end] 
+        trial_len = trial_data.shape[0]
+        # Pad to max length
+        all_trials[i, :trial_len] = trial_data
+    # Compute nanmean across trials
+    dff_mean = np.nanmean(all_trials, axis=0)
+    return dff_mean
