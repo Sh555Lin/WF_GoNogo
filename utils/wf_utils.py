@@ -8,6 +8,7 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 from glob import glob
 from os.path import join as pjoin
+from scipy import interpolate
 
 
 def cal_base(x, n_bins=10, thr=1/3):
@@ -269,23 +270,37 @@ def images2tiff_two_channel(folder, n_preview=None,
         _path_470 = glob.glob(os.path.join(folder, f'*-470/{i+1}.tif'))
         # print(_path_470)
         _path_405 = glob.glob(os.path.join(folder, f'*-405/{i+1}.tif'))
+        
+        # skip_iteration = False
+        
         if len(_path_470) == 1:
-            image_470 = imread(_path_470[0])
-            image_470 = image_470 * mask if mask is not None else image_470
-            if crop_params is not None:
-                image_470 = rotate_crop_array(image_470, angle=angle,
-                    left=left, top=top, width=width, height=height)
-            all_images[i, 0, :, :] = image_470
+            try:
+                image_470 = imread(_path_470[0])    
+                image_470 = image_470 * mask if mask is not None else image_470
+                if crop_params is not None:
+                    image_470 = rotate_crop_array(image_470, angle=angle,
+                        left=left, top=top, width=width, height=height)
+                all_images[i, 0, :, :] = image_470
+            except Exception as e:
+                error_msg = f"Error reading 470 channel file {_path_470[0]}: {str(e)}"
+                print(f"Warning: {error_msg}")
+                continue
+
         else:
             print(f'File {i}.tif not found in 470 channel!')
-
+    
+    for i in tqdm(range(n_tif)):
         if len(_path_405) == 1:
-            image_405 = imread(_path_405[0])
-            image_405 = image_405 * mask if mask is not None else image_405
-            if crop_params is not None:
-                image_405 = rotate_crop_array(image_405, angle=angle,
-                    left=left, top=top, width=width, height=height)
-            all_images[i, 1, :, :] = image_405
+            try:
+                image_405 = imread(_path_405[0])
+                image_405 = image_405 * mask if mask is not None else image_405
+                if crop_params is not None:
+                    image_405 = rotate_crop_array(image_405, angle=angle,
+                        left=left, top=top, width=width, height=height)
+                all_images[i, 1, :, :] = image_405
+            except Exception as e:
+                error_msg = f"Error reading 405 channel file {_path_405[0]}: {str(e)}"
+                print(f"Warning: {error_msg}")
         else:
             print(f'File {i}.tif not found in 405 channel!')
 
@@ -469,6 +484,7 @@ def find_closest_indices(x, y):
     numpy array of indices in x (size m)
     """
     indices = []
+    diffs = []
     
     for value in y:
         # Calculate absolute differences
@@ -476,8 +492,9 @@ def find_closest_indices(x, y):
         # Find index of minimum difference
         closest_idx = np.argmin(differences)
         indices.append(closest_idx)
+        diffs.append(np.min(differences))
     
-    return np.array(indices)
+    return np.array(indices),np.array(diffs)
 
 
 def add_trial_text_clean(image_array, trial_num, status="on"):
@@ -576,22 +593,58 @@ def load_trial_type(rawPath, timePath):
     print(f"trial_type 已保存到 {save_path}")
     return trial_type
 
+def interpolate_xy(x, y, new_n=None):
+    """
+    Interpolate x (timestamps) and y (3D array) with accurate first and last timestamps.
+    
+    Parameters:
+    x: array of shape (n,) - timestamps
+    y: array of shape (n, 512, 512) - corresponding data
+    new_n: int - desired number of interpolated samples (default: n*2)
+    
+    Returns:
+    x_interp: interpolated timestamps
+    y_interp: interpolated 3D array
+    """
+    n = len(x)
+    new_n = int(new_n)
+    if new_n is None:
+        new_n = n  # Default: double the samples
+    
+    # Create new equally spaced timestamps using accurate first/last
+    x_interp = np.linspace(x[0], x[-1], new_n)
+    
+    # Initialize output array
+    y_interp = np.zeros((new_n, 512, 512))
+    
+    # Interpolate each pixel independently
+    for i in range(512):
+        for j in range(512):
+            # Linear interpolation for each pixel
+            interp_func = interpolate.interp1d(x, y[:, i, j], kind='linear', 
+                                               fill_value='extrapolate')
+            y_interp[:, i, j] = interp_func(x_interp)
+    
+    return x_interp, y_interp
 
-def compute_trial_mean(dff, idx_onset, idx_offset):
+def compute_trial_mean(dff, wf_timestamp,idx_onset, idx_offset):
     """
     Vectorized version using padding for speed.
     """
     
     # Calculate trial lengths
     trial_lengths = idx_offset - idx_onset
-    
+    n_trials = len(idx_onset)
     # Find the two possible lengths
-    unique_lengths = np.unique(trial_lengths)
+    target_values = [5.2,5.3,9.7,9.8]
+    wf_sf = 10 #Hz
+    unique_lengths = np.intersect1d(np.unique(trial_lengths),np.array(target_values)*10).astype(int)
     
     # Choose the shorter length
     n_frames= np.min(unique_lengths)
+        
     print(n_frames)
-    n_trials = len(idx_onset)
+   
 
     _, x, y = dff.shape
     
@@ -599,11 +652,26 @@ def compute_trial_mean(dff, idx_onset, idx_offset):
     # Shape: [n_trials, n_frames, x, y]
     all_trials = np.full((n_trials, n_frames, x, y), np.nan, dtype=np.float32)
     
+   
     # Extract and pad each trial
     for i in tqdm(range(n_trials)):
         start = idx_onset[i]
         end = start+n_frames
+        # if end>idx_offset[i]:
+        #     print(i)
+        #     _dff = dff[start:idx_offset[i]]
+        #     _timestamp = wf_timestamp[start:idx_offset[i]]
+        #     _diffs = np.abs((_timestamp[-1]-_timestamp[0]) - target_values)
+        #     _min_idx = np.argmin(_diffs)
+        #     _timestamp_interp, _dff_interp = interpolate_xy(_timestamp,_dff,new_n=target_values[_min_idx]*wf_sf)
+        #     trial_data = _dff_interp
+        # else:
+        #     trial_data = dff[start:end] 
         # print(start)
+        if end>idx_offset[i]:
+            print('')
+            print(i+'th trial has lost frames!')
+            continue
         trial_data = dff[start:end] 
         trial_len = trial_data.shape[0]
         # Pad to max length
@@ -688,7 +756,6 @@ def count_tiff(target_path, threshold=1000):
     Fastest method - counts both .tiff and .tif files
     threshold: if provided, returns as soon as count exceeds threshold
     """
-    target_path = os.path.join(session_path, target_folder)
     count = 0
     
     with os.scandir(target_path) as entries:
