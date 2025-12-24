@@ -222,6 +222,51 @@ for session in session_list:
             print(f"The specified path does not exist: {rawPath}")
             continue
             
+        timePath = os.path.join(rawPath, 'time')
+        trial_path = os.path.join(timePath, 'trial_timestamp.npy')
+        # if not os.path.exists(trial_path):
+        #     config_path = os.path.join(os.path.abspath('.'),'config/A095_config.yaml')
+        #     preprocess_mice(config_path)
+        trial_timestamp = np.load(trial_path)
+        stim_path = os.path.join(timePath, 'stim_timestamp.npy')
+        stim_timestamp = np.load(stim_path)
+        wf_path = os.path.join(timePath, 'widefield_timestamps_blue.npy')
+        wf_timestamp = np.load(wf_path)
+        stim_path = os.path.join(timePath, 'stim_timestamp.npy')
+        stim_timestamp = np.load(stim_path)
+        wf_path = os.path.join(timePath, 'widefield_timestamps_blue.npy')
+        wf_timestamp = np.load(wf_path)
+        wf_timestamp = wf_timestamp/1e3
+        print(wf_timestamp.shape)
+        plt.plot(trial_timestamp,'.')
+        plt.show()
+        plt.plot(stim_timestamp,'r.')
+        plt.show()
+        plt.plot(wf_timestamp,'.')
+        plt.show()
+        
+        wf_trial_0_idx,wf_trial_0_diff = find_closest_indices(wf_timestamp, trial_timestamp[:,0])
+        wf_trial_1_idx,wf_trial_1_diff = find_closest_indices(wf_timestamp, trial_timestamp[:,1])
+        plt.plot(wf_trial_0_idx[1:]-wf_trial_0_idx[:-1],'.')
+        plt.plot(wf_trial_1_idx[1:]-wf_trial_1_idx[:-1],'.')
+        plt.show()
+        wf_sf = 10 #Hz
+        target_values = [5.2,5.3,9.7,9.8]
+        trial_duration = (wf_trial_1_idx-wf_trial_0_idx)/wf_sf
+        # trials_lossed_frames = np.where(~np.isin(trial_duration,target_values))[0]
+        # for tr in trials_lossed_frames:
+        #     _dff = dff[wf_trial_0_idx[tri]:wf_trial_1_idx[tri],:,:]
+        #     _timestamp = wf_timestamp[wf_trial_0_idx[tri]:wf_trial_1_idx[tri]]
+        #     _diffs = np.abs((_timestamp[-1]-_timestamp[0]) - target_values)
+        #     _min_idx = np.argmin(_diffs)
+        #     _timestamp_interp, _dff_interp = interpolate_xy(_timestamp,_dff,new_n=target_values[_min_idx]*wf_sf)
+        
+        
+        _idx = np.logical_or(trial_duration==5.2,trial_duration==9.7)
+        wf_trial_1_idx[_idx] = wf_trial_1_idx[_idx]+1
+        plt.plot((wf_trial_1_idx-wf_trial_0_idx)/wf_sf,'.')
+        plt.show()
+        
         dff_text_path = os.path.join(rawPath, f'{mouse_id}_{session}_dff.tif')
         if os.path.exists(dff_text_path):
             dff = imread(dff_text_path)
@@ -281,13 +326,22 @@ for session in session_list:
             # Scale the dff to range of 16 bit
             dff_min = dff.min()
             dff_max = dff.max()
-            range_val = dff_max - dff_min
+            dff_range = dff_max - dff_min
+            
+            if dff_range > 0:
+                scale_factor = 0.9*65535/dff_range
+            else:
+                scal_factor = 1
+                
+            metadata = {'dff_min':dff_min,
+                        'dff_max':dff_max,
+                        'scale_factor':scale_factor}
             
             dff_uint16 = np.empty(dff.shape, dtype=np.uint16)
             
             for i in tqdm(range(dff.shape[0])):  # 遍历 29,927 帧
-                normalized_frame = 65535 * (dff[i] - dff_min) / range_val
-                dff_uint16[i] = normalized_frame.astype(np.uint16)
+                scaled_data = scale_factor * (dff[i] - dff_min)
+                dff_uint16[i] = scaled_data.astype(np.uint16)
                 
             dff = dff_uint16
             del dff_uint16
@@ -304,8 +358,11 @@ for session in session_list:
             print('Text added.')
             # save the dff_scaled as tiff file
             save_path = os.path.join(rawPath, f'{mouse_id}_{session}_dff.tif')
-            imwrite(save_path, dff_text.astype(np.uint16), imagej=True)
-            print('The dff tiff file saved to:', save_path)
+            imwrite(save_path, dff_text.astype(np.uint16),metadata=metadata, imagej=True)
+            
+            
+            meta_file = save_path.replace('.tif','_metadata.npy')
+            np.save(meta_file, metadata, allow_pickle=True) 
             
             del dff_text
         
@@ -313,50 +370,7 @@ for session in session_list:
         
         #%
         
-        timePath = os.path.join(rawPath, 'time')
-        trial_path = os.path.join(timePath, 'trial_timestamp.npy')
-        # if not os.path.exists(trial_path):
-        #     config_path = os.path.join(os.path.abspath('.'),'config/A095_config.yaml')
-        #     preprocess_mice(config_path)
-        trial_timestamp = np.load(trial_path)
-        stim_path = os.path.join(timePath, 'stim_timestamp.npy')
-        stim_timestamp = np.load(stim_path)
-        wf_path = os.path.join(timePath, 'widefield_timestamps_blue.npy')
-        wf_timestamp = np.load(wf_path)
-        stim_path = os.path.join(timePath, 'stim_timestamp.npy')
-        stim_timestamp = np.load(stim_path)
-        wf_path = os.path.join(timePath, 'widefield_timestamps_blue.npy')
-        wf_timestamp = np.load(wf_path)
-        wf_timestamp = wf_timestamp/1e3
-        print(wf_timestamp.shape)
-        plt.plot(trial_timestamp,'.')
-        plt.show()
-        plt.plot(stim_timestamp,'r.')
-        plt.show()
-        plt.plot(wf_timestamp,'.')
-        plt.show()
-        
-        wf_trial_0_idx,wf_trial_0_diff = find_closest_indices(wf_timestamp, trial_timestamp[:,0])
-        wf_trial_1_idx,wf_trial_1_diff = find_closest_indices(wf_timestamp, trial_timestamp[:,1])
-        plt.plot(wf_trial_0_idx[1:]-wf_trial_0_idx[:-1],'.')
-        plt.plot(wf_trial_1_idx[1:]-wf_trial_1_idx[:-1],'.')
-        plt.show()
-        wf_sf = 10 #Hz
-        target_values = [5.2,5.3,9.7,9.8]
-        trial_duration = (wf_trial_1_idx-wf_trial_0_idx)/wf_sf
-        # trials_lossed_frames = np.where(~np.isin(trial_duration,target_values))[0]
-        # for tr in trials_lossed_frames:
-        #     _dff = dff[wf_trial_0_idx[tri]:wf_trial_1_idx[tri],:,:]
-        #     _timestamp = wf_timestamp[wf_trial_0_idx[tri]:wf_trial_1_idx[tri]]
-        #     _diffs = np.abs((_timestamp[-1]-_timestamp[0]) - target_values)
-        #     _min_idx = np.argmin(_diffs)
-        #     _timestamp_interp, _dff_interp = interpolate_xy(_timestamp,_dff,new_n=target_values[_min_idx]*wf_sf)
-        
-        
-        _idx = np.logical_or(trial_duration==5.2,trial_duration==9.7)
-        wf_trial_1_idx[_idx] = wf_trial_1_idx[_idx]+1
-        plt.plot((wf_trial_1_idx-wf_trial_0_idx)/wf_sf,'.')
-        plt.show()
+       
         # plt.plot(wf_timestamp[18001:wf_trial_1_idx[-1]+6]-wf_timestamp[18000:wf_trial_1_idx[-1]+5],'.')
         # plt.show()
         # acutal trial duration is 5.25 s or  9.75 s
