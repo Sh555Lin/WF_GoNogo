@@ -768,3 +768,8 @@ def count_tiff(target_path, threshold=1000):
                         return True  # Early exit
                     
     return count>threshold 
+
+
+def savefig(file_save):
+    plt.savefig(file_save+'.png',bbox_inches='tight')
+    plt.savefig(file_save+'.svg',bbox_inches='tight')
