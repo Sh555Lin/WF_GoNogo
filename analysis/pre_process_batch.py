@@ -212,7 +212,7 @@ for session in session_list:
         target_path = os.path.join(session_path, target_folder)
         run_tiff = count_tiff(target_path)
         mean_tiff_files = (glob(os.path.join(session_path,'*dff_mean_Hit.tiff')) + glob(os.path.join(session_path,'*dff_mean_Hit.tif')))
-    if session in ['20250807','20250808','20250811','20250813','20250911','20250930','20251001']:
+    if session in ['20250730','20250801','20250807','20250808','20250811','20250813','20250911','20250930','20251001']:
         continue
     if run_tiff and len(mean_tiff_files)==0:
         print('Processing: '+session)
