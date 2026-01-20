@@ -165,6 +165,7 @@ def plot_brain_region_temporal_profiles(df_mean_ls, conditions, wf_sf=10, region
                    hspace=0.25)  # Vertical space between subplots
     if len(fig_file)>0:
         savefig(fig_file)
+    plt.show()
 
 def response_latency(signal, baseline_s=1.25, fs=10, thr_std=5):
     """Response onset latency (s) relative to baseline."""
@@ -756,67 +757,449 @@ def analyze_all_causality(df_mean_ls, conditions, causality_type='granger', lag=
 #%%
 base_dir = "/Volumes/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
 mouse_id = "A095"
-ccf_json_path = os.path.join(base_dir,mouse_id,'20250815/process/ccf_transform.json')
-date_ls = ['20250827','20250903']
-date = date_ls[1]
-with open(ccf_json_path, 'r') as f:
-    ccf_data = json.load(f)
-file_alignment = os.path.join(base_dir, mouse_id, date,'process/ccf_regions.pkl')#'widefield_alignment/wf_alignment_A095.pkl')
-# Read a pickle file
-with open(file_alignment, 'rb') as f:  # 'rb' means read binary
-    data = load_pickle_safely(f)
+# ccf_json_path = os.path.join(base_dir,mouse_id,'20250815/process/ccf_transform.json')
+dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
+            '20250903', '20250904', '20250905', '20250923', '20250924',
+            '20250925', '20250926']
+date_file = os.path.join(base_dir, mouse_id,'dates.csv')
+if os.path.exists(date_file):
+    dates_ls = np.loadtxt(os.path.join(base_dir, mouse_id,'dates.csv'),dtype=str, delimiter=',')
+else:
+    np.savetxt(os.path.join(base_dir, mouse_id,'dates.csv'), dates_ls, fmt='%s',delimiter=',')
 
-#% generate eight dataframes: (Average, single trial) X (Hit, Miss, FA, CR)
-
-type_list = ['Hit','Miss', 'FA','CR']
-wf_sf = 10 #Hz
-stim_onset = 1.25 
-idx_onset = int(stim_onset*wf_sf)
-stim_duration = 3
-feedback_onset = 2.25
-
-n_region = data.shape[0]
-columns = []
-for region in data['acronym']:
-    columns.append(f"{region}_l")
-    columns.append(f"{region}_r")
-
-df_mean_ls = []   
-for tp in type_list:     
-    _file_df = os.path.join(base_dir, mouse_id,date,mouse_id+'_'+date+'_dff_mean_df_'+tp+'.csv')
-    if os.path.exists(_file_df):
-        df_mean = pd.read_csv(_file_df) 
-    else:
-        _file_tif = os.path.join(base_dir, mouse_id,date,mouse_id+'_'+date+'_dff_mean_'+tp+'.tif')
-        _dff = imread(_file_tif)
-        _dff_norm = norm_x(_dff)
-        _mean = np.mean(_dff_norm[:idx_onset,:,:],axis=0)
-        _sd = np.std(_dff_norm[:idx_onset,:,:],axis=0)
-        _dff_zs = np.zeros_like(_dff)
-        for i in range(_dff.shape[0]):
-            _dff_zs[i,:,:] = (_dff_norm[i,:,:] -  _mean)/_sd 
-        df_mean = pd.DataFrame(columns=columns)
-        for col in data['acronym']:
-            _data = data[data['acronym']==col]
-            _left_x = np.array(_data['left_x'].values[0])
-            _left_y = np.array(_data['left_y'].values[0])
-            _temporal_resp, _mask = extract_region_mean_response(_left_x,_left_y,_dff_norm)
-            _l = col+'_l'
-            df_mean[_l] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
-            
-            _right_x = np.array(_data['right_x'].values[0])
-            _right_y = np.array(_data['right_y'].values[0])
-            _temporal_resp, _mask = extract_region_mean_response(_right_x,_right_y,_dff_norm)
-            _r = col+'_r'
-            df_mean[_r] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
-        df_mean.to_csv(_file_df,index=False)     
-    df_mean_ls.append(df_mean)
-    
 
 #%%
-fig_file = os.path.join(base_dir, mouse_id,date,'fig_temporal_profiles')
-plot_brain_region_temporal_profiles(df_mean_ls,type_list,fig_file=fig_file,title=mouse_id+':'+date)
+# Fix the SI calculation errors and add new difference plots
+n_date = len(dates_ls)
+stim_onset = 1.25 
+stim_duration = 3
+feedback_onset = 2.25
+wf_sf = 10  # Hz
+stim_onset_idx = int(stim_onset * wf_sf)
+stim_offset_idx = int((stim_onset + stim_duration) * wf_sf)
 
+# Initialize arrays for storing results
+amp_left_VISp_Hit = np.zeros(n_date)
+amp_right_VISp_Hit = np.zeros(n_date)
+amp_left_VISp_FA = np.zeros(n_date)
+amp_right_VISp_FA = np.zeros(n_date)
+amp_left_VISp_CR = np.zeros(n_date)
+amp_right_VISp_CR = np.zeros(n_date)
+amp_left_VISp_Miss = np.zeros(n_date)
+amp_right_VISp_Miss = np.zeros(n_date)
+
+# Difference between left and right
+diff_lr_VISp_Hit = np.zeros(n_date)
+diff_lr_VISp_FA = np.zeros(n_date)
+diff_lr_VISp_CR = np.zeros(n_date)
+diff_lr_VISp_Miss = np.zeros(n_date)
+
+# Symmetry index
+si_lr_VISp_Hit = np.zeros(n_date)
+si_lr_VISp_FA = np.zeros(n_date)
+si_lr_VISp_CR = np.zeros(n_date)
+si_lr_VISp_Miss = np.zeros(n_date)
+
+# New: Differences between conditions within each hemisphere
+diff_Hit_Miss_left = np.zeros(n_date)   # Hit - Miss for left VISp
+diff_Hit_Miss_right = np.zeros(n_date)  # Hit - Miss for right VISp
+diff_FA_CR_left = np.zeros(n_date)      # FA - CR for left VISp
+diff_FA_CR_right = np.zeros(n_date)     # FA - CR for right VISp
+
+type_list = ['Hit', 'Miss', 'FA', 'CR']
+
+for i_date, date in enumerate(dates_ls):
+    file_alignment = os.path.join(base_dir, mouse_id, date, 'process/ccf_transform.json')
+    
+    with open(file_alignment, 'r') as f:
+        ccf_data = json.load(f)
+    
+    n_region = len(ccf_data['ccf_regions'])
+    
+    # Find VISp index
+    visp_idx = -1
+    for i in range(n_region):
+        if ccf_data['ccf_regions'][i]['acronym'] == 'VISp':
+            visp_idx = i
+            break
+    
+    if visp_idx == -1:
+        print(f"Warning: VISp not found in {date}")
+        continue
+    
+    # Process each trial type
+    for tp_idx, tp in enumerate(type_list):
+        _file_df = os.path.join(base_dir, mouse_id, date, 
+                               f"{mouse_id}_{date}_dff_mean_df_{tp}.csv")
+        
+        if os.path.exists(_file_df):
+            df_mean = pd.read_csv(_file_df)
+        else:
+            _file_tif = os.path.join(base_dir, mouse_id, date, 
+                                    f"{mouse_id}_{date}_dff_mean_{tp}.tif")
+            
+            if os.path.exists(_file_tif):
+                _dff = imread(_file_tif)
+                _dff_norm = norm_x(_dff)
+            else:
+                print(f"Warning: File not found for {date} {tp}")
+                _dff_norm = np.zeros((53, 512, 512))
+            
+            # Create DataFrame with region data
+            columns = []
+            for i in range(n_region):
+                region = ccf_data['ccf_regions'][i]['acronym']
+                columns.append(f"{region}_l")
+                columns.append(f"{region}_r")
+            
+            df_mean = pd.DataFrame(columns=columns)
+            
+            for i in range(n_region):
+                _data = ccf_data['ccf_regions'][i]
+                region = _data['acronym']
+                
+                # Left hemisphere
+                _left_x = np.array(_data['left_x'])
+                _left_y = np.array(_data['left_y'])
+                _temporal_resp_l, _mask_l = extract_region_mean_response(_left_x, _left_y, _dff_norm)
+                if len(_temporal_resp_l) > 0:
+                    baseline_mean = np.mean(_temporal_resp_l[:stim_onset_idx]) if stim_onset_idx > 0 else 0
+                    baseline_std = np.std(_temporal_resp_l[:stim_onset_idx]) if stim_onset_idx > 0 else 1
+                    df_mean[f"{region}_l"] = (_temporal_resp_l - baseline_mean) / baseline_std
+                
+                # Right hemisphere
+                _right_x = np.array(_data['right_x'])
+                _right_y = np.array(_data['right_y'])
+                _temporal_resp_r, _mask_r = extract_region_mean_response(_right_x, _right_y, _dff_norm)
+                if len(_temporal_resp_r) > 0:
+                    baseline_mean = np.mean(_temporal_resp_r[:stim_onset_idx]) if stim_onset_idx > 0 else 0
+                    baseline_std = np.std(_temporal_resp_r[:stim_onset_idx]) if stim_onset_idx > 0 else 1
+                    df_mean[f"{region}_r"] = (_temporal_resp_r - baseline_mean) / baseline_std
+            
+            df_mean.to_csv(_file_df, index=False)
+        
+        # Extract VISp amplitudes
+        if 'VISp_l' in df_mean.columns and 'VISp_r' in df_mean.columns:
+            # Get amplitude during stimulus period
+            visp_l_stim = df_mean['VISp_l'].iloc[stim_onset_idx:stim_offset_idx+1]
+            visp_r_stim = df_mean['VISp_r'].iloc[stim_onset_idx:stim_offset_idx+1]
+            
+            amp_l = np.mean(visp_l_stim)
+            amp_r = np.mean(visp_r_stim)
+            
+            # Store amplitudes
+            if tp == 'Hit':
+                amp_left_VISp_Hit[i_date] = amp_l
+                amp_right_VISp_Hit[i_date] = amp_r
+                diff_lr_VISp_Hit[i_date] = (amp_l - amp_r)
+                si_lr_VISp_Hit[i_date] = (amp_l - amp_r) / (abs(amp_l) + abs(amp_r) + 1e-10)
+            elif tp == 'FA':
+                amp_left_VISp_FA[i_date] = amp_l
+                amp_right_VISp_FA[i_date] = amp_r
+                diff_lr_VISp_FA[i_date] = (amp_l - amp_r) 
+                si_lr_VISp_FA[i_date] = (amp_l - amp_r) / (abs(amp_l) + abs(amp_r) + 1e-10)  # Fixed: was si_lr_VISp_Hit
+            elif tp == 'CR':
+                amp_left_VISp_CR[i_date] = amp_l
+                amp_right_VISp_CR[i_date] = amp_r
+                diff_lr_VISp_CR[i_date] = (amp_l - amp_r)
+                si_lr_VISp_CR[i_date] = (amp_l - amp_r) / (abs(amp_l) + abs(amp_r) + 1e-10)  # Fixed: was si_lr_VISp_Hit
+            elif tp == 'Miss':
+                amp_left_VISp_Miss[i_date] = amp_l
+                amp_right_VISp_Miss[i_date] = amp_r
+                diff_lr_VISp_Miss[i_date] = (amp_l - amp_r)
+                si_lr_VISp_Miss[i_date] = (amp_l - amp_r) / (abs(amp_l) + abs(amp_r) + 1e-10)  # Fixed: was si_lr_VISp_Hit
+
+# Calculate differences between conditions within each hemisphere
+diff_Hit_Miss_left = amp_left_VISp_Hit - amp_left_VISp_Miss
+diff_Hit_Miss_right = amp_right_VISp_Hit - amp_right_VISp_Miss
+diff_FA_CR_left = amp_left_VISp_FA - amp_left_VISp_CR
+diff_FA_CR_right = amp_right_VISp_FA - amp_right_VISp_CR
+
+# Convert dates to MMDD format for plotting
+date_objects = pd.to_datetime(dates_ls, format='%Y%m%d')
+dates_mmdd = [d.strftime('%m/%d') for d in date_objects]
+
+# =====================================================================
+# FIGURE 1: Individual Trial Type Plots (2x2 grid)
+# =====================================================================
+print("\nFIGURE 1: VISp Amplitudes by Trial Type")
+fig1, axes1 = plt.subplots(2, 2, figsize=(15, 8))
+fig1.suptitle(f'{mouse_id} - VISp Activity by Trial Type', fontsize=16, fontweight='bold')
+
+trial_configs = [
+    ('Hit', amp_left_VISp_Hit, amp_right_VISp_Hit, 0, 0),
+    ('FA', amp_left_VISp_FA, amp_right_VISp_FA, 0, 1),
+    ('CR', amp_left_VISp_CR, amp_right_VISp_CR, 1, 0),
+    ('Miss', amp_left_VISp_Miss, amp_right_VISp_Miss, 1, 1)
+]
+
+for trial_name, left_data, right_data, row, col in trial_configs:
+    ax = axes1[row, col]
+    ax.plot(dates_mmdd, left_data, 'bo-', label='Left', linewidth=2, markersize=6)
+    ax.plot(dates_mmdd, right_data, 'ro-', label='Right', linewidth=2, markersize=6)
+    ax.set_title(f'{trial_name} Trials', fontsize=14)
+    ax.set_ylabel('Amplitude (z)', fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
+    ax.set_xticks(range(len(dates_mmdd)))
+    ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+plt.tight_layout()
+plt.show()
+
+# =====================================================================
+# FIGURE 2: Combined Bar Plots
+# =====================================================================
+print("\nFIGURE 2: VISp Combined Comparison Plots")
+fig2, axes2 = plt.subplots(2, 2, figsize=(15, 8))
+fig2.suptitle(f'{mouse_id} - VISp Amplitudes and Differences', fontsize=16, fontweight='bold')
+
+x_pos = np.arange(len(dates_mmdd))
+
+# Top row: All trial types bar plots
+bar_width = 0.18
+colors = {'Hit': 'green', 'FA': 'red', 'CR': 'blue', 'Miss': 'orange'}
+
+# Top-left: Left VISp all trial types
+ax = axes2[0, 0]
+for i, (trial_name, color) in enumerate(colors.items()):
+    offset = (i - 1.5) * bar_width
+    data = [amp_left_VISp_Hit, amp_left_VISp_FA, amp_left_VISp_CR, amp_left_VISp_Miss][i]
+    ax.bar(x_pos + offset, data, bar_width, label=trial_name, color=color, alpha=0.7)
+ax.set_title('A. Left VISp: All Trial Types', fontsize=14)
+ax.set_ylabel('Amplitude (z)', fontsize=11)
+ax.legend(fontsize=9, ncol=2)
+ax.grid(True, alpha=0.2, axis='y')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+# Top-right: Right VISp all trial types
+ax = axes2[0, 1]
+for i, (trial_name, color) in enumerate(colors.items()):
+    offset = (i - 1.5) * bar_width
+    data = [amp_right_VISp_Hit, amp_right_VISp_FA, amp_right_VISp_CR, amp_right_VISp_Miss][i]
+    ax.bar(x_pos + offset, data, bar_width, label=trial_name, color=color, alpha=0.7)
+ax.set_title('B. Right VISp: All Trial Types', fontsize=14)
+ax.set_ylabel('Amplitude (z)', fontsize=11)
+ax.legend(fontsize=9, ncol=2)
+ax.grid(True, alpha=0.2, axis='y')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+# Bottom row: Condition differences bar plots
+bar_width_combined = 0.35  # Wider for two bars
+
+# Bottom-left: Combined Hit-Miss & FA-CR for Left VISp
+ax = axes2[1, 0]
+bars1 = ax.bar(x_pos - bar_width_combined/2, diff_Hit_Miss_left, bar_width_combined, 
+               label='Hit - Miss', color='purple', alpha=0.7, edgecolor='black')
+bars2 = ax.bar(x_pos + bar_width_combined/2, diff_FA_CR_left, bar_width_combined, 
+               label='FA - CR', color='teal', alpha=0.7, edgecolor='black')
+ax.set_title('C. Left VISp: Condition Differences', fontsize=14)
+ax.set_xlabel('Date', fontsize=11)
+ax.set_ylabel('Amplitude Difference', fontsize=11)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.2, axis='y')
+ax.axhline(y=0, color='black', alpha=0.3, linestyle='--')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+# Bottom-right: Combined Hit-Miss & FA-CR for Right VISp
+ax = axes2[1, 1]
+bars1 = ax.bar(x_pos - bar_width_combined/2, diff_Hit_Miss_right, bar_width_combined, 
+               label='Hit - Miss', color='magenta', alpha=0.7, edgecolor='black')
+bars2 = ax.bar(x_pos + bar_width_combined/2, diff_FA_CR_right, bar_width_combined, 
+               label='FA - CR', color='cyan', alpha=0.7, edgecolor='black')
+ax.set_title('D. Right VISp: Condition Differences', fontsize=14)
+ax.set_xlabel('Date', fontsize=11)
+ax.set_ylabel('Amplitude Difference', fontsize=11)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.2, axis='y')
+ax.axhline(y=0, color='black', alpha=0.3, linestyle='--')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+plt.tight_layout()
+plt.show()
+
+# =====================================================================
+# FIGURE 3: Left-Right Differences (Line Plots)
+# =====================================================================
+print("\nFIGURE 3: VISp Left-Right Differences")
+fig3, axes3 = plt.subplots(1, 2, figsize=(15, 5))
+fig3.suptitle(f'{mouse_id} - VISp Hemispheric Differences', fontsize=16, fontweight='bold')
+
+# Left: Simple Left-Right Difference
+ax = axes3[0]
+diff_configs = [
+    ('Hit', diff_lr_VISp_Hit, 'green'),
+    ('FA', diff_lr_VISp_FA, 'red'),
+    ('CR', diff_lr_VISp_CR, 'blue'),
+    ('Miss', diff_lr_VISp_Miss, 'orange')
+]
+
+for trial_name, data, color in diff_configs:
+    ax.plot(dates_mmdd, data, 'o-', label=trial_name, color=color, linewidth=2, markersize=6)
+
+ax.set_title('A. Left-Right Difference (L - R)', fontsize=14)
+ax.set_xlabel('Date', fontsize=12)
+ax.set_ylabel('Amplitude Difference', fontsize=12)
+ax.legend(fontsize=10)
+ax.grid(True, alpha=0.2)
+ax.axhline(y=0, color='black', alpha=0.3)
+ax.set_xticks(range(len(dates_mmdd)))
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+# Right: Symmetry Index
+ax = axes3[1]
+si_configs = [
+    ('Hit', si_lr_VISp_Hit, 'green'),
+    ('FA', si_lr_VISp_FA, 'red'),
+    ('CR', si_lr_VISp_CR, 'blue'),
+    ('Miss', si_lr_VISp_Miss, 'orange')
+]
+
+for trial_name, data, color in si_configs:
+    ax.plot(dates_mmdd, data, 'o-', label=trial_name, color=color, linewidth=2, markersize=6)
+
+ax.set_title('B. Symmetry Index (L-R)/(|L|+|R|)', fontsize=14)
+ax.set_xlabel('Date', fontsize=12)
+ax.set_ylabel('Symmetry Index', fontsize=12)
+ax.legend(fontsize=10)
+ax.grid(True, alpha=0.2)
+ax.axhline(y=0, color='black', alpha=0.3)
+ax.set_xticks(range(len(dates_mmdd)))
+ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+plt.tight_layout()
+plt.show()
+
+#%%
+
+
+n_date = dates_ls.size
+stim_onset = 1.25 
+stim_duration = 3
+feedback_onset = 2.25
+diff_lr_VISp_Hit = np.zeros(n_date)
+diff_lr_VISp_FA = np.zeros(n_date)
+diff_lr_VISp_CR = np.zeros(n_date)
+diff_lr_VISp_Miss = np.zeros(n_date)
+amp_left_VISp_Hit = np.zeros(n_date)
+diff_lr_VISp_FA = np.zeros(n_date)
+diff_lr_VISp_CR = np.zeros(n_date)
+diff_lr_VISp_Miss = np.zeros(n_date)
+diff_lr_VISp_Hit = np.zeros(n_date)
+diff_lr_VISp_FA = np.zeros(n_date)
+diff_lr_VISp_CR = np.zeros(n_date)
+diff_lr_VISp_Miss = np.zeros(n_date)
+for i_date, date in enumerate(dates_ls):
+    #%
+    # date = date_ls[1]
+    # with open(ccf_json_path, 'r') as f:
+    #     ccf_data = json.load(f)
+    file_alignment = os.path.join(base_dir, mouse_id, date,'process/ccf_transform.json')#'widefield_alignment/wf_alignment_A095.pkl')
+    # Read a pickle file
+    # with open(file_alignment, 'rb') as f:  # 'rb' means read binary
+    #     data = load_pickle_safely(f)
+    with open(file_alignment, 'r') as f:
+        ccf_data = json.load(f)
+        
+    
+    # plot V1 to check the alignment 
+    n_region = len(ccf_data['ccf_regions'])   
+    # for i in range(n_region):
+    #     if ccf_data['ccf_regions'][i]['acronym']=='VISp':
+    #         print(i)
+    #         _data = ccf_data['ccf_regions'][i]
+    #         _left_x = np.array(_data['left_x'])
+    #         _left_y = np.array(_data['left_y'])
+    #         plt.plot(_left_x,_left_y,'.')
+    #         _right_x = np.array(_data['right_x'])
+    #         _right_y = np.array(_data['right_y'])
+    #         plt.plot(_right_x,_right_y,'.')
+    #         plt.axis('equal') 
+    #         plt.show()
+        
+    
+    
+#% 
+
+    #% generate eight dataframes: (Average, single trial) X (Hit, Miss, FA, CR)
+    
+    type_list = ['Hit','Miss', 'FA','CR']
+    wf_sf = 10 #Hz
+    stim_onset = 1.25 
+    idx_onset = int(stim_onset*wf_sf)
+    stim_duration = 3
+    feedback_onset = 2.25
+    
+    stim_onset_idx = int(stim_onset*wf_sf)
+    stim_offset_idx = int((stim_onset+stim_duration)*wf_sf)
+    
+    columns = []
+    for i in range(n_region):
+        region = ccf_data['ccf_regions'][i]['acronym']
+        columns.append(f"{region}_l")
+        columns.append(f"{region}_r")
+    
+    df_mean_ls = []   
+    for tp in type_list:     
+        _file_df = os.path.join(base_dir, mouse_id,date,mouse_id+'_'+date+'_dff_mean_df_'+tp+'.csv')
+        if os.path.exists(_file_df):
+            df_mean = pd.read_csv(_file_df) 
+        else:
+            _file_tif = os.path.join(base_dir, mouse_id,date, mouse_id+'_'+date+'_dff_mean_'+tp+'.tif')
+            if os.path.exists(_file_tif):
+                _dff = imread(_file_tif)
+                _dff_norm = norm_x(_dff)
+                _mean = np.mean(_dff_norm[:idx_onset,:,:],axis=0)
+                _sd = np.std(_dff_norm[:idx_onset,:,:],axis=0)
+                _dff_zs = np.zeros_like(_dff)
+                for i in range(_dff.shape[0]):
+                    _dff_zs[i,:,:] = (_dff_norm[i,:,:] -  _mean)/_sd 
+            else:
+                _dff_norm = np.zeros((53,512,512))
+            df_mean = pd.DataFrame(columns=columns)
+            for i in range(n_region):
+                _data = ccf_data['ccf_regions'][i]
+                region = _data['acronym']
+                _left_x = np.array(_data['left_x'])
+                _left_y = np.array(_data['left_y'])
+                _temporal_resp, _mask = extract_region_mean_response(_left_x,_left_y,_dff_norm)
+                _l = region+'_l'
+                df_mean[_l] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
+                
+                _right_x = np.array(_data['right_x'])
+                _right_y = np.array(_data['right_y'])
+                _temporal_resp, _mask = extract_region_mean_response(_right_x,_right_y,_dff_norm)
+                _r = region+'_r'
+                df_mean[_r] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
+            df_mean.to_csv(_file_df,index=False)     
+        df_mean_ls.append(df_mean)
+        
+        _l = np.mean(df_mean['VISp_l'][stim_onset_idx:stim_offset_idx+1])
+        _r = np.mean(df_mean['VISp_r'][stim_onset_idx:stim_offset_idx+1])
+        if tp == 'Hit':
+            diff_lr_VISp_Hit[i_date] = (_l-_r)/(_l+_r)
+        if tp == 'FA':
+            diff_lr_VISp_FA[i_date] = (_l-_r)/(_l+_r)
+    
+    fig_file = os.path.join(base_dir, mouse_id,date,'fig_temporal_profiles')
+    if not os.path.exists(fig_file+'.png'):
+        plot_brain_region_temporal_profiles(df_mean_ls,type_list,fig_file=fig_file,title=mouse_id+':'+date)
+
+
+date_objects = pd.to_datetime(dates_ls, format='%Y%m%d')
+dates_mmdd = [d.strftime('%m%d') for d in date_objects]
+
+plt.plot(dates_mmdd ,diff_lr_VISp_Hit,'k*-')
+plt.title('Hit')
+plt.show()
+
+plt.plot(dates_mmdd,diff_lr_VISp_FA,'ro-')
+plt.title('FA')
+plt.show()
 #%%
 conditions = type_list
 results_latency = analyze_all_conditions(df_mean_ls, conditions, fs=10, measure='latency')
@@ -1914,3 +2297,6 @@ results, p_vals, lags = analyze_all_causality(
 #%%
 
     
+
+
+
