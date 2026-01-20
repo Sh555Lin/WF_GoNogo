@@ -670,7 +670,7 @@ def compute_trial_mean(dff, wf_timestamp,idx_onset, idx_offset):
         # print(start)
         if end>idx_offset[i]:
             print('')
-            print(i+'th trial has lost frames!')
+            print(str(i)+'th trial has lost frames!')
             continue
         trial_data = dff[start:end] 
         trial_len = trial_data.shape[0]

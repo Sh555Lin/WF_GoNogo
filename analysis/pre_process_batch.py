@@ -189,7 +189,7 @@ def pre_process_wf(rawPath):
 #%%
 # base_dir = "/Volumes/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
 base_dir = "/home/lyt//Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
-mouse_id = "A095"
+mouse_id = "A092"
 
 stim_onset = 1.25 
 stim_duration = 3
@@ -363,7 +363,7 @@ for session in session_list:
             
             meta_file = save_path.replace('.tif','_metadata.npy')
             np.save(meta_file, metadata, allow_pickle=True) 
-            
+            print('dff.tif saved')
             del dff_text
         
         # dff = 65535 * (dff - dff_min) / (dff_max - dff_min)
@@ -403,10 +403,11 @@ for session in session_list:
         
         type_list = ['Hit','Miss', 'FA','CR']
         for i in range(1,5):
-            dff_mean = compute_trial_mean(dff,wf_timestamp,wf_trial_0_idx[trial_type==i],wf_trial_1_idx[trial_type==i])
-            save_path = os.path.join(rawPath, f'{mouse_id}_{session}_dff_mean_{type_list[i-1]}.tif')
-            imwrite(save_path, dff_mean.astype(np.uint16), imagej=True)
-            print('The dff tiff file saved to:', save_path)
+            if np.sum(wf_trial_0_idx[trial_type==i])>0:
+                dff_mean = compute_trial_mean(dff,wf_timestamp,wf_trial_0_idx[trial_type==i],wf_trial_1_idx[trial_type==i])
+                save_path = os.path.join(rawPath, f'{mouse_id}_{session}_dff_mean_{type_list[i-1]}.tif')
+                imwrite(save_path, dff_mean.astype(np.uint16), imagej=True)
+                print('The dff tiff file saved to:', save_path)
         # pre_process_wf(session_path)
     else:
         if len(mean_tiff_files)>0:
