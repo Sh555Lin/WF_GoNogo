@@ -21,6 +21,7 @@ from skimage.draw import polygon
 import warnings
 from scipy.stats import f
 import json
+from glob import glob
 
 abspath = os.path.abspath(__file__)
 current_dir = os.path.dirname(abspath)
@@ -753,19 +754,39 @@ def analyze_all_causality(df_mean_ls, conditions, causality_type='granger', lag=
     return results, p_values, optimal_lags_all
 
 
-
+def list_folders_starting_with_2025_glob(path):
+    """List all folders starting with '2025' using glob pattern matching."""
+    # Join path with pattern (ensure path ends with separator)
+    if not path.endswith(os.sep):
+        path = path + os.sep
+    
+    # Pattern to match folders starting with 2025
+    pattern = os.path.join(path, "2025*")
+    
+    # Use glob to find matching directories
+    matching_dirs = []
+    for item in glob(pattern):
+        if os.path.isdir(item):
+            # Get just the folder name
+            folder_name = os.path.basename(item)
+            matching_dirs.append(folder_name)
+    
+    return matching_dirs
 #%%
-base_dir = "/Volumes/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
-mouse_id = "A095"
+# base_dir = "/Volumes/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
+base_dir = "/home/lyt/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
+mouse_id = "A092"
 # ccf_json_path = os.path.join(base_dir,mouse_id,'20250815/process/ccf_transform.json')
-dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
-            '20250903', '20250904', '20250905', '20250923', '20250924',
-            '20250925', '20250926']
-date_file = os.path.join(base_dir, mouse_id,'dates.csv')
-if os.path.exists(date_file):
-    dates_ls = np.loadtxt(os.path.join(base_dir, mouse_id,'dates.csv'),dtype=str, delimiter=',')
-else:
-    np.savetxt(os.path.join(base_dir, mouse_id,'dates.csv'), dates_ls, fmt='%s',delimiter=',')
+dates_ls = list_folders_starting_with_2025_glob(os.path.join(base_dir,mouse_id))
+# dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
+#             '20250903', '20250904', '20250905', '20250923', '20250924',
+#             '20250925', '20250926']
+# date_ls =  os.path.join(base_dir, mouse_id)
+# date_file = os.path.join(base_dir, mouse_id,'dates.csv')
+# if os.path.exists(date_file):
+#     dates_ls = np.loadtxt(os.path.join(base_dir, mouse_id,'dates.csv'),dtype=str, delimiter=',')
+# else:
+#     np.savetxt(os.path.join(base_dir, mouse_id,'dates.csv'), dates_ls, fmt='%s',delimiter=',')
 
 
 #%%
@@ -810,6 +831,9 @@ type_list = ['Hit', 'Miss', 'FA', 'CR']
 
 for i_date, date in enumerate(dates_ls):
     file_alignment = os.path.join(base_dir, mouse_id, date, 'process/ccf_transform.json')
+    
+    if not os.path.exists(file_alignment):
+        continue
     
     with open(file_alignment, 'r') as f:
         ccf_data = json.load(f)

@@ -38,8 +38,9 @@ def correct_lum_outlier(images, outlier_index_470, outlier_index_405,
         if outlier_index_470 is not None:
             for i in range(len(outlier_index_470)):
                 start, end = outlier_index_470[i]
-                images[start:end+1, 0, :, :] = 0.5*images[start-1, 0, :, :] + \
-                    0.5*images[end+1, 0, :, :]
+                if end+1<images.shape[0]:
+                    images[start:end+1, 0, :, :] = 0.5*images[start-1, 0, :, :] + \
+                        0.5*images[end+1, 0, :, :]
 
         if outlier_index_405 is not None:
             for i in range(len(outlier_index_405)):
