@@ -21,6 +21,7 @@ from skimage.draw import polygon
 import warnings
 from scipy.stats import f
 import json
+from glob import glob
 
 abspath = os.path.abspath(__file__)
 current_dir = os.path.dirname(abspath)
@@ -30,743 +31,44 @@ if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 from utils.wf_utils import *
 # import pickle
-#%%
-def load_pickle_safely(filename):
-    """
-    Safely load pickle files - handles both file paths and file objects
-    """
-    # If filename is already a file object, use it directly
-    if hasattr(filename, 'read'):
-        return pickle.load(filename)
-    
-    # If it's a string/path, open it
-    else:
-        with open(filename, 'rb') as f:
-            return pickle.load(f)
-    
-    
-def norm_x(x):
-    x_min = np.nanmin(x)
-    x_max = np.nanmax(x)
-    x_norm = (x-x_min)/(x_max-x_min)
-    return x_norm
-
-def extract_region_mean_response(x, y, dff):
-    """
-    Version using scikit-image for polygon operations.
-    """
-    
-    # Ensure inputs are numpy arrays
-    x = np.asarray(x)
-    y = np.asarray(y)
-    
-    # Get polygon coordinates (ensure they're integers)
-    x_int = np.round(x).astype(int)
-    y_int = np.round(y).astype(int)
-    
-    # Get dimensions
-    n_frames, height, width = dff.shape  # (53, 512, 512)
-    
-    # Clip coordinates to image bounds
-    x_int = np.clip(x_int, 0, width - 1)      # 0 to 511
-    y_int = np.clip(y_int, 0, height - 1)     # 0 to 511
-    
-    # Create polygon mask
-    # polygon() expects (row, col) = (y, x)
-    rr, cc = polygon(y_int, x_int, shape=(height, width))
-    mask = np.zeros((height, width), dtype=bool)  # (512, 512)
-    mask[rr, cc] = True
-    
-    # Extract mean response
-    time_series = np.zeros(n_frames)  # length = 53
-    
-    # Loop through frames (frames are first dimension)
-    for frame_idx in range(n_frames):
-        # Get current frame: shape (512, 512)
-        current_frame = dff[frame_idx, :, :]
-        
-        # Extract pixels within mask and compute mean
-        region_pixels = current_frame[mask]
-        time_series[frame_idx] = np.mean(region_pixels)
-    
-    return time_series, mask
-
-
-def plot_brain_region_temporal_profiles(df_mean_ls, conditions, wf_sf=10, regions_to_plot=None, figsize=(10, 30),fig_file='',title=''):
-    
-    stim_onset = 1.25 
-    stim_duration = 3
-    feedback_onset = 2.25
-    if regions_to_plot is None:
-        all_regions = sorted(list(set(col[:-2] for col in df_mean_ls[0].columns 
-                                    if col.endswith(('_l', '_r')))))
-        regions_to_plot = all_regions[:]  # First 8 regions
-    
-    n_regions = len(regions_to_plot)
-    
-    fig, axes = plt.subplots(n_regions, 4, figsize=figsize, 
-                            sharex=False, sharey='row')
-    
-    if n_regions == 1:
-        axes = axes.reshape(1, -1)
-        
-    max_times = []
-    for col_idx, df in enumerate(df_mean_ls):
-        max_time = len(df) / wf_sf
-        max_times.append(max_time)
-        # print(f"Column {col_idx} ({conditions[col_idx]}): max time = {max_time:.2f}s")
-        
-    hemisphere_colors = {'left': '#1f77b4', 'right': '#ff7f0e'}
-    
-    for row_idx, region in enumerate(regions_to_plot):
-        for col_idx, (df, cond) in enumerate(zip(df_mean_ls, conditions)):
-            ax = axes[row_idx, col_idx]
-            time_axis = np.arange(len(df)) / wf_sf
-            # print(time_axis[-1])
-            
-            # Plot both hemispheres
-            for hemisphere, color in hemisphere_colors.items():
-                col_name = f"{region}_{hemisphere[0]}"  # 'l' or 'r'
-                if col_name in df.columns:
-                    linestyle = '-' if hemisphere == 'left' else '-'
-                    ax.plot(time_axis, df[col_name], 
-                           color=color, linestyle=linestyle,
-                           linewidth=1.5, alpha=0.8,
-                           label=hemisphere.capitalize())
-                    ax.axvline(x=stim_onset,color='green',linestyle='--')
-                    ax.axvline(x=(stim_onset+stim_duration),color='green',linestyle='--')
-                    ax.axvline(x=feedback_onset,color='orange',linestyle='--')
-            ax.set_xlim(0, max_times[col_idx])
-            
-            # Set labels
-            if row_idx == 0:
-                ax.set_title(cond, fontsize=11, fontweight='bold')
-            if col_idx == 0:
-                ax.set_ylabel(f"{region}\n z-score", fontsize=10)
-            if row_idx == n_regions - 1:
-                ax.set_xlabel('Time (s)', fontsize=9)
-            else:
-                ax.set_xticklabels([])  # Remove x tick labels for non-bottom rows
-            
-            # ax.grid(True, alpha=0.2)
-            
-            # Add legend to first subplot
-            if row_idx == 0 and col_idx == len(conditions)-1:
-                ax.legend(fontsize=8)
-    
-    plt.suptitle(title,
-                 fontsize=12, fontweight='bold', y=1)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.98,  # Make room for suptitle
-                   bottom=0.05,  # Bottom margin
-                   left=0.08,  # Left margin
-                   right=0.98,  # Right margin
-                   wspace=0.15,  # Horizontal space between subplots
-                   hspace=0.25)  # Vertical space between subplots
-    if len(fig_file)>0:
-        savefig(fig_file)
-    plt.show()
-
-def response_latency(signal, baseline_s=1.25, fs=10, thr_std=5):
-    """Response onset latency (s) relative to baseline."""
-    n_base = int(baseline_s * fs)
-    base = signal[:n_base]
-
-    if len(base) == 0 or np.std(base) == 0:
-        return np.nan
-
-    thr = np.mean(base) + thr_std * np.std(base)
-    idx = np.where(signal[n_base:] > thr)[0]
-
-    return (idx[0] + n_base) / fs if len(idx) else np.nan
-
-
-def response_amplitude(signal, baseline_s=1.25, fs=10):
-    """Response amplitude relative to baseline mean."""
-    n_base = int(baseline_s * fs)
-    base = signal[:n_base]
-    return np.nanmax(signal) - np.nanmean(base)
-
-
-
-def compute_pairwise_matrix(df, regions, measure, fs):
-    """
-    Compute pairwise latency/amplitude differences AND
-    return absolute latency/amplitude per region.
-    """
-
-    # absolute latency or amplitude per region
-    region_values = pd.Series(
-        {
-            r: (
-                response_latency(df[r].values, fs=fs)
-                if measure == 'latency'
-                else response_amplitude(df[r].values, fs=fs)
-            )
-            for r in regions
-        }
-    )
-
-    # pairwise difference matrix (j - i)
-    mat = np.full((len(regions), len(regions)), np.nan)
-    for i, ri in enumerate(regions):
-        for j, rj in enumerate(regions):
-            if i != j and np.isfinite(region_values[ri]) and np.isfinite(region_values[rj]):
-                mat[i, j] = region_values[rj] - region_values[ri]
-
-    pairwise_df = pd.DataFrame(mat, index=regions, columns=regions)
-
-    return pairwise_df, region_values
-
-def visualize_hemisphere_matrix(mat_df, condition, measure):
-    regions = mat_df.index.tolist()
-    base_regions = sorted(set(r[:-2] for r in regions))
-    unit = 's' if measure == 'latency' else 'Δsignal'
-    title_measure = 'Latency' if measure == 'latency' else 'Amplitude'
-
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    vals = mat_df.values.copy()
-    np.fill_diagonal(vals, 0)
-
-    vmax = np.nanmax(np.abs(vals))
-    vmin = -vmax if vmax > 0 else -1
-
-    # 1. Full matrix
-    im = axes[0, 0].imshow(vals, cmap='coolwarm', vmin=vmin, vmax=vmax)
-    axes[0, 0].set_title(f'{condition}\nFull {title_measure} Difference Matrix ({unit})')
-    axes[0, 0].set_xticks(range(len(regions)))
-    axes[0, 0].set_yticks(range(len(regions)))
-    axes[0, 0].set_xticklabels(regions, rotation=45, ha='right', fontsize=8)
-    axes[0, 0].set_yticklabels(regions, fontsize=8)
-    plt.colorbar(im, ax=axes[0, 0], label=f'{title_measure} difference ({unit})')
-
-    # 2. Inter-hemispheric (L→R)
-    diffs, labels = [], []
-    for r in base_regions:
-        l, rgt = f'{r}_l', f'{r}_r'
-        if l in mat_df.index and rgt in mat_df.columns:
-            diffs.append(mat_df.loc[l, rgt])
-            labels.append(r)
-
-    ax = axes[0, 1]
-    colors = ['blue' if d > 0 else 'red' for d in diffs]
-    ax.bar(range(len(diffs)), diffs, color=colors)
-    ax.axhline(0, color='k', alpha=0.3)
-    ax.set_title(f'Inter-hemispheric {title_measure} (R − L)')
-    ax.set_ylabel(f'{title_measure} difference ({unit})')
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha='right')
-
-    # 3. Left hemisphere
-    left = [r for r in regions if r.endswith('_l')]
-    idx = [regions.index(r) for r in left]
-    im = axes[1, 0].imshow(vals[np.ix_(idx, idx)], cmap='coolwarm', vmin=vmin, vmax=vmax)
-    axes[1, 0].set_title(f'Left Hemisphere {title_measure}')
-    axes[1, 0].set_xticks(range(len(left)))
-    axes[1, 0].set_yticks(range(len(left)))
-    axes[1, 0].set_xticklabels([r[:-2] for r in left], rotation=45, ha='right')
-    axes[1, 0].set_yticklabels([r[:-2] for r in left])
-    plt.colorbar(im, ax=axes[1, 0], label=f'{title_measure} difference ({unit})')
-
-    # 4. Right hemisphere
-    right = [r for r in regions if r.endswith('_r')]
-    idx = [regions.index(r) for r in right]
-    im = axes[1, 1].imshow(vals[np.ix_(idx, idx)], cmap='coolwarm', vmin=vmin, vmax=vmax)
-    axes[1, 1].set_title(f'Right Hemisphere {title_measure}')
-    axes[1, 1].set_xticks(range(len(right)))
-    axes[1, 1].set_yticks(range(len(right)))
-    axes[1, 1].set_xticklabels([r[:-2] for r in right], rotation=45, ha='right')
-    axes[1, 1].set_yticklabels([r[:-2] for r in right])
-    plt.colorbar(im, ax=axes[1, 1], label=f'{title_measure} difference ({unit})')
-
-    plt.suptitle(f'{title_measure} Analysis: {condition}', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-    return fig
-
-def analyze_all_conditions(df_mean_ls, conditions, fs=10, measure='latency'):
-    results = {}
-
-    df0 = df_mean_ls[0]
-    base = sorted(set(c[:-2] for c in df0.columns if c.endswith(('_l', '_r'))))
-    regions = [f'{r}_l' for r in base] + [f'{r}_r' for r in base]
-
-    for df, cond in zip(df_mean_ls, conditions):
-        print(f'Analyzing {cond} ({measure})...')
-        mat,_ = compute_pairwise_matrix(df, regions, measure, fs)
-        results[cond] = mat
-        visualize_hemisphere_matrix(mat, cond, measure)
-
-    return results
-
-
-def granger_causality(x, y, lag=2):
-    """
-    Safe Granger Causality test with error handling.
-    """
-    n = min(len(x), len(y))
-    
-    # Ensure enough data points
-    if n < 3 * lag + 10:  # Minimum data points requirement
-        return 0, 1.0, False
-    
-    # Create lagged vectors
-    y_data = y[lag:n]
-    y_past = np.column_stack([y[lag-i:n-i] for i in range(1, lag+1)])
-    
-    # Check for NaN or infinite values
-    if np.any(np.isnan(y_data)) or np.any(np.isinf(y_data)):
-        return 0, 1.0, False
-    
-    # Add small regularization to avoid singular matrices
-    regularization = 1e-8 * np.eye(y_past.shape[1])
-    
-    try:
-        # Models - Restricted: only Y's past
-        X1 = np.column_stack([np.ones(len(y_past)), y_past])
-        
-        # Unrestricted: Y's past + X's past
-        x_past = np.column_stack([x[lag-i:n-i] for i in range(1, lag+1)])
-        X2 = np.column_stack([np.ones(len(y_past)), y_past, x_past])
-        
-        # Add regularization to design matrices
-        X1_reg = X1.copy()
-        X2_reg = X2.copy()
-        
-        # Fit models with error handling
-        try:
-            beta1 = np.linalg.lstsq(X1_reg, y_data, rcond=None)[0]
-            beta2 = np.linalg.lstsq(X2_reg, y_data, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            # Use pseudo-inverse as fallback
-            beta1 = np.linalg.pinv(X1_reg) @ y_data
-            beta2 = np.linalg.pinv(X2_reg) @ y_data
-        
-        # Calculate residuals
-        res1 = y_data - X1_reg @ beta1
-        res2 = y_data - X2_reg @ beta2
-        
-        # RSS
-        rss1 = np.sum(res1**2)
-        rss2 = np.sum(res2**2)
-        
-        # Avoid division by zero
-        if rss2 < 1e-10:
-            return 0, 1.0, False
-            
-        # F-test
-        f_stat = ((rss1 - rss2) / lag) / (rss2 / (len(y_data) - 2*lag - 1))
-        
-        # Calculate proper p-value
-        df_num = lag
-        df_den = len(y_data) - 2*lag - 1
-        
-        if df_den > 0 and f_stat > 0:
-            p_value = 1 - f.cdf(f_stat, df_num, df_den)
-        else:
-            p_value = 1.0
-            
-        return f_stat, p_value, rss1 > rss2
-        
-    except Exception as e:
-        # Catch any other errors
-        warnings.warn(f"Granger causality calculation failed: {e}")
-        return 0, 1.0, False
-
-
-def transfer_entropy(x, y, lag=1):
-    """
-    Safe Transfer Entropy calculation with error handling.
-    """
-    try:
-        n = min(len(x), len(y)) - lag
-        
-        if n < 10:  # Minimum data points
-            return 0.0
-            
-        # Align data
-        x_past = x[:n]
-        y_past = y[lag:lag+n]
-        y_future = y[lag:lag+n]
-        
-        # Use bins based on quantiles
-        x_bin = (x_past > np.median(x_past)).astype(int)
-        y_past_bin = (y_past > np.median(y_past)).astype(int)
-        y_future_bin = (y_future > np.median(y_future)).astype(int)
-        
-        # Count states with smoothing
-        count = np.ones((2, 2, 2))
-        
-        for i in range(n):
-            count[y_future_bin[i], y_past_bin[i], x_bin[i]] += 1
-        
-        # Normalize
-        p = count / (n + 8)
-        
-        # Calculate TE
-        te = 0
-        for yf in [0, 1]:
-            for yp in [0, 1]:
-                for xp in [0, 1]:
-                    p_joint = p[yf, yp, xp]
-                    p_yx = np.sum(p[:, yp, xp])
-                    p_yy = np.sum(p[yf, yp, :])
-                    p_y = np.sum(p[:, yp, :])
-                    
-                    if p_yx > 0 and p_y > 0 and p_joint > 0:
-                        p_cond1 = p_joint / p_yx
-                        p_cond2 = p_yy / p_y
-                        
-                        if p_cond1 > 0 and p_cond2 > 0:
-                            te += p_joint * np.log2(p_cond1 / p_cond2)
-        
-        return max(0, te)
-        
-    except Exception as e:
-        warnings.warn(f"Transfer entropy calculation failed: {e}")
-        return 0.0
-
-
-def find_optimal_lag(x, y, max_lag=10, method='granger'):
-    """
-    Find optimal lag for causality analysis.
-    
-    Parameters:
-    -----------
-    x, y : array-like
-        Time series data
-    max_lag : int
-        Maximum lag to test
-    method : str
-        'granger' or 'transfer'
-    
-    Returns:
-    --------
-    optimal_lag : int
-        Optimal lag value
-    scores : list
-        Scores for each lag
-    """
-    scores = []
-    valid_lags = []
-    
-    for lag in range(1, max_lag + 1):
-        try:
-            if method == 'granger':
-                f_stat, p_value, _ = granger_causality(x, y, lag=lag)
-                # Use -log10(p) as score, lower p = better
-                if p_value > 0:
-                    score = -np.log10(p_value)
-                else:
-                    score = 0
-            else:  # transfer entropy
-                te = transfer_entropy(x, y, lag=lag)
-                score = te
-                
-            scores.append(score)
-            valid_lags.append(lag)
-            
-        except Exception:
-            scores.append(0)
-            valid_lags.append(lag)
-    
-    if len(scores) == 0:
-        return 1, [0] * max_lag
-    
-    # Find lag with maximum score
-    optimal_idx = np.argmax(scores)
-    optimal_lag = valid_lags[optimal_idx]
-    
-    return optimal_lag, scores
-
-
-def plot_causality_matrix(df, regions, causality_type='granger', lag='auto', figsize=(12, 10),title=''):
-    """
-    Plot Granger Causality or Transfer Entropy matrix for brain regions.
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        Time series data with regions as columns
-    regions : list
-        List of region names (e.g., ['VISp_l', 'VISp_r', ...])
-    causality_type : str
-        'granger' for Granger Causality or 'transfer' for Transfer Entropy
-    lag : int or 'auto'
-        Lag parameter for causality calculation, 'auto' for automatic selection
-    figsize : tuple
-        Figure size
-    
-    Returns:
-    --------
-    fig : matplotlib figure
-        Figure object
-    causality_matrix : ndarray
-        Causality matrix
-    p_value_matrix : ndarray
-        P-value matrix (for Granger only)
-    optimal_lags : ndarray
-        Optimal lags used for each pair (if lag='auto')
-    """
-    
-    n_regions = len(regions)
-    causality_matrix = np.zeros((n_regions, n_regions))
-    p_value_matrix = np.ones((n_regions, n_regions))
-    optimal_lags = np.zeros((n_regions, n_regions), dtype=int)
-    
-    # Determine lag strategy
-    if lag == 'auto':
-        # Use optimal lag for each pair
-        print("Finding optimal lags for each pair...")
-        for i in tqdm(range(n_regions), desc="Finding optimal lags"):
-            for j in range(n_regions):
-                if i != j:
-                    x = df[regions[i]].values
-                    y = df[regions[j]].values
-                    optimal_lag, _ = find_optimal_lag(x, y, method=causality_type)
-                    optimal_lags[i, j] = optimal_lag
-    else:
-        # Use fixed lag for all pairs
-        optimal_lags[:, :] = lag
-    
-    # Calculate causality for each pair
-    for i in tqdm(range(n_regions), desc=f"Calculating {causality_type}"):
-        for j in range(n_regions):
-            if i != j:
-                x = df[regions[i]].values
-                y = df[regions[j]].values
-                current_lag = optimal_lags[i, j]
-                
-                if causality_type == 'granger':
-                    f_stat, p_value, _ = granger_causality(x, y, lag=current_lag)
-                    causality_matrix[i, j] = f_stat
-                    p_value_matrix[i, j] = p_value
-                elif causality_type == 'transfer':
-                    te = transfer_entropy(x, y, lag=current_lag)
-                    causality_matrix[i, j] = te
-                else:
-                    raise ValueError("causality_type must be 'granger' or 'transfer'")
-    
-    # Create figure
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    
-    # 1. Full causality matrix
-    vmax = np.nanmax(causality_matrix[causality_matrix > 0]) if np.any(causality_matrix > 0) else 1
-    im1 = axes[0, 0].imshow(causality_matrix, cmap='hot', vmin=0, vmax=vmax)
-    axes[0, 0].set_title(f'{causality_type.capitalize()} Matrix\n(Full Brain)')
-    axes[0, 0].set_xticks(range(n_regions))
-    axes[0, 0].set_yticks(range(n_regions))
-    axes[0, 0].set_xticklabels(regions, rotation=45, ha='right', fontsize=8)
-    axes[0, 0].set_yticklabels(regions, fontsize=8)
-    plt.colorbar(im1, ax=axes[0, 0], label=f'{causality_type.capitalize()} Value')
-    
-    # Add significance stars for Granger causality
-    if causality_type == 'granger':
-        sig_threshold = 0.05
-        for i in range(n_regions):
-            for j in range(n_regions):
-                if i != j and p_value_matrix[i, j] < sig_threshold:
-                    axes[0, 0].text(j, i, '*', ha='center', va='center', 
-                                   color='white', fontsize=8, fontweight='bold')
-    
-    # 2. Lag matrix (if auto lag was used)
-    im2 = axes[0, 1].imshow(optimal_lags, cmap='viridis', vmin=1, vmax=10)
-    axes[0, 1].set_title('Optimal Lags Used')
-    axes[0, 1].set_xticks(range(n_regions))
-    axes[0, 1].set_yticks(range(n_regions))
-    axes[0, 1].set_xticklabels(regions, rotation=45, ha='right', fontsize=8)
-    axes[0, 1].set_yticklabels(regions, fontsize=8)
-    plt.colorbar(im2, ax=axes[0, 1], label='Lag (frames)')
-    
-    # 3. Top connections
-    axes[0, 2].axis('off')
-    if causality_type == 'granger':
-        text_content = f"Granger Causality Analysis\n"
-        text_content += f"Significance: * p < 0.05\n\n"
-        if lag != 'auto':
-            text_content += f"Fixed lag: {lag}\n\n"
-    else:
-        text_content = f"Transfer Entropy Analysis\n"
-        if lag != 'auto':
-            text_content += f"Fixed lag: {lag}\n\n"
-    
-    # Find top connections
-    flat_indices = np.argsort(causality_matrix.flatten())[::-1]
-    top_n = min(8, n_regions * n_regions - n_regions)  # Exclude diagonal
-    
-    text_content += "Top Connections:\n"
-    count = 0
-    for idx in flat_indices:
-        if count >= top_n:
-            break
-        i, j = divmod(idx, n_regions)
-        if i != j and causality_matrix[i, j] > 0:
-            if causality_type == 'granger':
-                sig_star = '*' if p_value_matrix[i, j] < 0.05 else ''
-                lag_info = f" (lag={optimal_lags[i, j]})" if lag == 'auto' else ""
-                text_content += f"{regions[i]} → {regions[j]}: {causality_matrix[i, j]:.3f}{sig_star}{lag_info}\n"
-            else:
-                lag_info = f" (lag={optimal_lags[i, j]})" if lag == 'auto' else ""
-                text_content += f"{regions[i]} → {regions[j]}: {causality_matrix[i, j]:.3f}{lag_info}\n"
-            count += 1
-    
-    if count == 0:
-        text_content += "No significant connections found\n"
-    
-    axes[0, 2].text(0.1, 0.5, text_content, transform=axes[0, 2].transAxes,
-                   verticalalignment='center', fontsize=9,
-                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    # 4. Left hemisphere only
-    left_regions = [r for r in regions if r.endswith('_l')]
-    if len(left_regions) > 0:
-        left_indices = [regions.index(r) for r in left_regions]
-        left_matrix = causality_matrix[np.ix_(left_indices, left_indices)]
-        
-        im2 = axes[1, 0].imshow(left_matrix, cmap='hot', vmin=0, vmax=vmax)
-        axes[1, 0].set_title(f'{causality_type.capitalize()} Matrix\n(Left Hemisphere)')
-        axes[1, 0].set_xticks(range(len(left_regions)))
-        axes[1, 0].set_yticks(range(len(left_regions)))
-        axes[1, 0].set_xticklabels([r[:-2] for r in left_regions], rotation=45, ha='right')
-        axes[1, 0].set_yticklabels([r[:-2] for r in left_regions])
-        plt.colorbar(im2, ax=axes[1, 0], label=f'{causality_type.capitalize()} Value')
-        
-        if causality_type == 'granger':
-            left_p_matrix = p_value_matrix[np.ix_(left_indices, left_indices)]
-            for i in range(len(left_regions)):
-                for j in range(len(left_regions)):
-                    if i != j and left_p_matrix[i, j] < 0.05:
-                        axes[1, 0].text(j, i, '*', ha='center', va='center', 
-                                       color='white', fontsize=8, fontweight='bold')
-    
-    # 5. Right hemisphere only
-    right_regions = [r for r in regions if r.endswith('_r')]
-    if len(right_regions) > 0:
-        right_indices = [regions.index(r) for r in right_regions]
-        right_matrix = causality_matrix[np.ix_(right_indices, right_indices)]
-        
-        im3 = axes[1, 1].imshow(right_matrix, cmap='hot', vmin=0, vmax=vmax)
-        axes[1, 1].set_title(f'{causality_type.capitalize()} Matrix\n(Right Hemisphere)')
-        axes[1, 1].set_xticks(range(len(right_regions)))
-        axes[1, 1].set_yticks(range(len(right_regions)))
-        axes[1, 1].set_xticklabels([r[:-2] for r in right_regions], rotation=45, ha='right')
-        axes[1, 1].set_yticklabels([r[:-2] for r in right_regions])
-        plt.colorbar(im3, ax=axes[1, 1], label=f'{causality_type.capitalize()} Value')
-        
-        if causality_type == 'granger':
-            right_p_matrix = p_value_matrix[np.ix_(right_indices, right_indices)]
-            for i in range(len(right_regions)):
-                for j in range(len(right_regions)):
-                    if i != j and right_p_matrix[i, j] < 0.05:
-                        axes[1, 1].text(j, i, '*', ha='center', va='center', 
-                                       color='white', fontsize=8, fontweight='bold')
-    
-    # 6. Lag distribution (if auto lag was used)
-    if lag == 'auto':
-        axes[1, 2].hist(optimal_lags[optimal_lags > 0].flatten(), 
-                       bins=range(1, 12), edgecolor='black', alpha=0.7)
-        axes[1, 2].set_title('Optimal Lag Distribution')
-        axes[1, 2].set_xlabel('Lag (frames)')
-        axes[1, 2].set_ylabel('Frequency')
-        axes[1, 2].set_xticks(range(1, 11))
-    else:
-        axes[1, 2].axis('off')
-    
-    # # Adjust layout
-    # title = f'{causality_type.upper()} Analysis'
-    # if lag == 'auto':
-    #     title += ' (Auto Lag)'
-    # else:
-    #     title += f' (Lag={lag})'
-    
-    plt.suptitle(title, fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    
-    if causality_type == 'granger':
-        return fig, causality_matrix, p_value_matrix, optimal_lags
-    else:
-        return fig, causality_matrix, None, optimal_lags
-
-
-def analyze_all_causality(df_mean_ls, conditions, causality_type='granger', lag='auto'):
-    """
-    Analyze causality for all conditions.
-    
-    Parameters:
-    -----------
-    df_mean_ls : list of DataFrames
-        List of dataframes for each condition
-    conditions : list
-        List of condition names
-    causality_type : str
-        'granger' or 'transfer'
-    lag : int or 'auto'
-        Lag parameter or 'auto' for automatic selection
-    
-    Returns:
-    --------
-    results : dict
-        Dictionary of causality matrices for each condition
-    """
-    
-    results = {}
-    p_values = {}
-    optimal_lags_all = {}
-    
-    # Get regions from first dataframe
-    df0 = df_mean_ls[0]
-    base_regions = sorted(set(c[:-2] for c in df0.columns if c.endswith(('_l', '_r'))))
-    regions = [f'{r}_l' for r in base_regions] + [f'{r}_r' for r in base_regions]
-    
-    # Filter regions that exist in all dataframes
-    common_regions = []
-    for r in regions:
-        if all(r in df.columns for df in df_mean_ls):
-            common_regions.append(r)
-    
-    print(f"Analyzing {causality_type} causality for {len(common_regions)} regions")
-    print(f"Regions: {common_regions}")
-    
-    # Analyze each condition
-    for df, cond in zip(df_mean_ls, conditions):
-        print(f'\n{"="*50}')
-        print(f'Condition: {cond}')
-        print(f'{"="*50}')
-        
-        fig, causality_matrix, p_value_matrix, optimal_lags = plot_causality_matrix(
-            df, common_regions, causality_type=causality_type, lag=lag, title=cond
-        )
-        
-        results[cond] = causality_matrix
-        if p_value_matrix is not None:
-            p_values[cond] = p_value_matrix
-        optimal_lags_all[cond] = optimal_lags
-        
-        # # Save figure
-        # lag_str = 'auto' if lag == 'auto' else f'lag{lag}'
-        # fig_file = f'{causality_type}_{lag_str}_{cond}.png'
-        # plt.savefig(fig_file, dpi=300, bbox_inches='tight')
-        # print(f"Saved figure: {fig_file}")
-        # plt.show()
-    
-    return results, p_values, optimal_lags_all
-
-
+#%
 
 #%%
 base_dir = "/Volumes/Data_attention/Transfer learning/LinShu/DATA_linshu/000 Widefield"
-mouse_id = "A095"
+mouse_id = "A269"
 # ccf_json_path = os.path.join(base_dir,mouse_id,'20250815/process/ccf_transform.json')
-dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
-            '20250903', '20250904', '20250905', '20250923', '20250924',
-            '20250925', '20250926']
+# dates_ls = list_folders_starting_with_2025_glob(os.path.join(base_dir,mouse_id))
+# # dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
+# #             '20250903', '20250904', '20250905', '20250923', '20250924',
+# #             '20250925', '20250926']
+# dates_del = ['20250723','20250724','20250725','20250730', '20250801', '20250807', '20250808', '20250811',
+#             '20250813', '20250911', '20250929', '20250930'] #A095
+# dates_ls = [date for date in dates_ls if date not in dates_del]
+# dates_ls = sorted(dates_ls, key=lambda x: pd.to_datetime(x, format='%Y%m%d'))
 date_file = os.path.join(base_dir, mouse_id,'dates.csv')
 if os.path.exists(date_file):
     dates_ls = np.loadtxt(os.path.join(base_dir, mouse_id,'dates.csv'),dtype=str, delimiter=',')
 else:
-    np.savetxt(os.path.join(base_dir, mouse_id,'dates.csv'), dates_ls, fmt='%s',delimiter=',')
+    dates_ls = list_folders_starting_with_202_glob(os.path.join(base_dir,mouse_id))
+    # dates_ls = ['20250827', '20250828', '20250829', '20250901', '20250902',
+    #             '20250903', '20250904', '20250905', '20250923', '20250924',
+    #             '20250925', '20250926']
 
+    if mouse_id == 'A092':
+        dates_del = ['20250729','20250730','20250731','20250801','20250804','20250805','20250812','20250828','20250910','20250912','20250806','20250915'] #A092
+    elif mouse_id == 'A093':
+        dates_del = ['20250729','20250730','20250731','20250801','20250804','20250806','20250811','20250812','20250814','20250905','20250923','20251001']
+    elif mouse_id == "A095":
+        dates_del = ['20250723','20250724','20250725','20250730', '20250801', '20250807', '20250808', '20250811',
+                    '20250813', '20250911', '20250929', '20250930'] #A095
+    elif mouse_id == 'A269':
+        dates_del =  ['20251218','20251222','20251229','20260102','20260128','20260130','20260203','20260205','20260216','20260302']
+        
+    dates_ls = [date for date in dates_ls if date not in dates_del]
+    dates_ls = sorted(dates_ls, key=lambda x: pd.to_datetime(x, format='%Y%m%d'))
+    np.savetxt(os.path.join(base_dir, mouse_id,'dates.csv'), dates_ls, fmt='%s',delimiter=',')
+date_objects = pd.to_datetime(dates_ls, format='%Y%m%d')
+dates_mmdd = [d.strftime('%m%d') for d in date_objects]
 
 #%%
 # Fix the SI calculation errors and add new difference plots
@@ -777,6 +79,7 @@ feedback_onset = 2.25
 wf_sf = 10  # Hz
 stim_onset_idx = int(stim_onset * wf_sf)
 stim_offset_idx = int((stim_onset + stim_duration) * wf_sf)
+feedback_onset_idx = int(feedback_onset * wf_sf)
 
 # Initialize arrays for storing results
 amp_left_VISp_Hit = np.zeros(n_date)
@@ -787,7 +90,7 @@ amp_left_VISp_CR = np.zeros(n_date)
 amp_right_VISp_CR = np.zeros(n_date)
 amp_left_VISp_Miss = np.zeros(n_date)
 amp_right_VISp_Miss = np.zeros(n_date)
-
+type_list = ['Hit', 'Miss', 'FA','CR']
 # Difference between left and right
 diff_lr_VISp_Hit = np.zeros(n_date)
 diff_lr_VISp_FA = np.zeros(n_date)
@@ -806,8 +109,10 @@ diff_Hit_Miss_right = np.zeros(n_date)  # Hit - Miss for right VISp
 diff_FA_CR_left = np.zeros(n_date)      # FA - CR for left VISp
 diff_FA_CR_right = np.zeros(n_date)     # FA - CR for right VISp
 
-type_list = ['Hit', 'Miss', 'FA', 'CR']
 
+dff_or_z_score = True
+df_mean_ls_all_dates = []
+# fig, ax = plt.subplots(1, 1, figsize=(10,10)) #show brain regions
 for i_date, date in enumerate(dates_ls):
     file_alignment = os.path.join(base_dir, mouse_id, date, 'process/ccf_transform.json')
     
@@ -826,9 +131,11 @@ for i_date, date in enumerate(dates_ls):
     if visp_idx == -1:
         print(f"Warning: VISp not found in {date}")
         continue
-    
+    df_mean_ls = []  
     # Process each trial type
     for tp_idx, tp in enumerate(type_list):
+        
+        
         _file_df = os.path.join(base_dir, mouse_id, date, 
                                f"{mouse_id}_{date}_dff_mean_df_{tp}.csv")
         
@@ -853,7 +160,28 @@ for i_date, date in enumerate(dates_ls):
                 columns.append(f"{region}_r")
             
             df_mean = pd.DataFrame(columns=columns)
-            
+            if tp_idx==0:
+                fig, axes = plt.subplots(1, 2, figsize=(10,6))
+                axes[0].imshow(np.mean(_dff_norm,axis=0))
+                for i in range(n_region):
+                    _data = ccf_data['ccf_regions'][i]
+                    _left_x = np.array(_data['left_x'])
+                    _left_y = np.array(_data['left_y'])
+                    _right_x = np.array(_data['right_x'])
+                    _right_y = np.array(_data['right_y'])
+                    axes[1].plot(_left_x,_left_y,'b.')
+                    axes[1].plot(_right_x,_right_y,'r.')
+                
+                axes[0].set_aspect('equal')
+                axes[1].set_aspect('equal')
+                xlim_img = axes[0].get_xlim()
+                ylim_img = axes[0].get_ylim()
+                axes[1].set_xlim(xlim_img)
+                axes[1].set_ylim(ylim_img)
+                plt.tight_layout()
+                savefig(os.path.join(base_dir, mouse_id, date, 'process/ccf_aligned'))
+                plt.show()    
+                    
             for i in range(n_region):
                 _data = ccf_data['ccf_regions'][i]
                 region = _data['acronym']
@@ -865,8 +193,11 @@ for i_date, date in enumerate(dates_ls):
                 if len(_temporal_resp_l) > 0:
                     baseline_mean = np.mean(_temporal_resp_l[:stim_onset_idx]) if stim_onset_idx > 0 else 0
                     baseline_std = np.std(_temporal_resp_l[:stim_onset_idx]) if stim_onset_idx > 0 else 1
-                    df_mean[f"{region}_l"] = (_temporal_resp_l - baseline_mean) / baseline_std
-                
+                   
+                    if dff_or_z_score:
+                        df_mean[f"{region}_l"] = (_temporal_resp_l - baseline_mean) / baseline_mean
+                    else:
+                        df_mean[f"{region}_l"] = (_temporal_resp_l - baseline_mean) / baseline_std
                 # Right hemisphere
                 _right_x = np.array(_data['right_x'])
                 _right_y = np.array(_data['right_y'])
@@ -874,15 +205,19 @@ for i_date, date in enumerate(dates_ls):
                 if len(_temporal_resp_r) > 0:
                     baseline_mean = np.mean(_temporal_resp_r[:stim_onset_idx]) if stim_onset_idx > 0 else 0
                     baseline_std = np.std(_temporal_resp_r[:stim_onset_idx]) if stim_onset_idx > 0 else 1
-                    df_mean[f"{region}_r"] = (_temporal_resp_r - baseline_mean) / baseline_std
+                    if dff_or_z_score:
+                        df_mean[f"{region}_r"] = (_temporal_resp_r - baseline_mean) / baseline_mean
+                    else:
+                        df_mean[f"{region}_r"] = (_temporal_resp_r - baseline_mean) / baseline_std
             
             df_mean.to_csv(_file_df, index=False)
-        
+
+                
         # Extract VISp amplitudes
         if 'VISp_l' in df_mean.columns and 'VISp_r' in df_mean.columns:
             # Get amplitude during stimulus period
-            visp_l_stim = df_mean['VISp_l'].iloc[stim_onset_idx:stim_offset_idx+1]
-            visp_r_stim = df_mean['VISp_r'].iloc[stim_onset_idx:stim_offset_idx+1]
+            visp_l_stim = df_mean['VISp_l'].iloc[stim_onset_idx:feedback_onset_idx] # before feedback
+            visp_r_stim = df_mean['VISp_r'].iloc[stim_onset_idx:feedback_onset_idx] 
             
             amp_l = np.mean(visp_l_stim)
             amp_r = np.mean(visp_r_stim)
@@ -908,8 +243,31 @@ for i_date, date in enumerate(dates_ls):
                 amp_right_VISp_Miss[i_date] = amp_r
                 diff_lr_VISp_Miss[i_date] = (amp_l - amp_r)
                 si_lr_VISp_Miss[i_date] = (amp_l - amp_r) / (abs(amp_l) + abs(amp_r) + 1e-10)  # Fixed: was si_lr_VISp_Hit
+                
+        df_mean_ls.append(df_mean)
+    df_mean_ls_all_dates.append(df_mean_ls) 
+    if dff_or_z_score:
+        fig_file = os.path.join(base_dir, mouse_id,date,'fig_temporal_profiles_dff')    
+    else:
+        fig_file = os.path.join(base_dir, mouse_id,date,'fig_temporal_profiles_z_score')    
+    if not os.path.exists(fig_file+'.png'):
+        plot_brain_region_temporal_profiles(df_mean_ls,type_list,fig_file=fig_file,title=mouse_id+':'+date)
+#%% plot temporal profiles for specific brain regions
 
-# Calculate differences between conditions within each hemisphere
+# After the loop, call the plotting function
+plot_region_temporal_profiles(
+    df_mean_ls_all_dates=df_mean_ls_all_dates,
+    dates_list=dates_ls,
+    region_name='VISp',  # Change this to plot different regions
+    conditions=type_list,
+    wf_sf=10,
+    figsize=(16, 3 * len(dates_ls)),  # Height scales with number of dates
+    fig_file=os.path.join(base_dir, mouse_id, f'{mouse_id}_VISp_temporal_profiles.png'),
+    title=f'Mouse {mouse_id}'
+)
+
+
+#%% Calculate differences between conditions within each hemisphere
 diff_Hit_Miss_left = amp_left_VISp_Hit - amp_left_VISp_Miss
 diff_Hit_Miss_right = amp_right_VISp_Hit - amp_right_VISp_Miss
 diff_FA_CR_left = amp_left_VISp_FA - amp_left_VISp_CR
@@ -919,22 +277,49 @@ diff_FA_CR_right = amp_right_VISp_FA - amp_right_VISp_CR
 date_objects = pd.to_datetime(dates_ls, format='%Y%m%d')
 dates_mmdd = [d.strftime('%m/%d') for d in date_objects]
 
+
 # =====================================================================
 # FIGURE 1: Individual Trial Type Plots (2x2 grid)
 # =====================================================================
 print("\nFIGURE 1: VISp Amplitudes by Trial Type")
-fig1, axes1 = plt.subplots(2, 2, figsize=(15, 8))
+# figsize = (20,8)
+# fig1, axes1 = plt.subplots(2, 2, figsize=figsize)
+# fig1.suptitle(f'{mouse_id} - VISp Activity by Trial Type', fontsize=16, fontweight='bold')
+
+# trial_configs = [
+#     ('Hit', amp_left_VISp_Hit, amp_right_VISp_Hit, 0, 0),
+#     ('FA', amp_left_VISp_FA, amp_right_VISp_FA, 0, 1),
+#     ('CR', amp_left_VISp_CR, amp_right_VISp_CR, 1, 1),
+#     ('Miss', amp_left_VISp_Miss, amp_right_VISp_Miss, 1, 0)
+# ]
+
+# for trial_name, left_data, right_data, row, col in trial_configs:
+#     ax = axes1[row, col]
+#     ax.plot(dates_mmdd, left_data, 'bo-', label='Left', linewidth=2, markersize=6)
+#     ax.plot(dates_mmdd, right_data, 'ro-', label='Right', linewidth=2, markersize=6)
+#     ax.set_title(f'{trial_name} Trials', fontsize=14)
+#     ax.set_ylabel('Amplitude (z)', fontsize=11)
+#     ax.legend(fontsize=9)
+#     ax.grid(True, alpha=0.2)
+#     ax.set_xticks(range(len(dates_mmdd)))
+#     ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
+
+# plt.tight_layout()
+# plt.show()
+
+figsize = (20,12)
+fig1, axes1 = plt.subplots(4, 1, figsize=figsize)
 fig1.suptitle(f'{mouse_id} - VISp Activity by Trial Type', fontsize=16, fontweight='bold')
 
 trial_configs = [
-    ('Hit', amp_left_VISp_Hit, amp_right_VISp_Hit, 0, 0),
-    ('FA', amp_left_VISp_FA, amp_right_VISp_FA, 0, 1),
-    ('CR', amp_left_VISp_CR, amp_right_VISp_CR, 1, 0),
-    ('Miss', amp_left_VISp_Miss, amp_right_VISp_Miss, 1, 1)
+    ('Hit', amp_left_VISp_Hit, amp_right_VISp_Hit, 0),
+    ('Miss', amp_left_VISp_Miss, amp_right_VISp_Miss, 1),
+    ('FA', amp_left_VISp_FA, amp_right_VISp_FA, 2),
+    ('CR', amp_left_VISp_CR, amp_right_VISp_CR, 3)
 ]
 
-for trial_name, left_data, right_data, row, col in trial_configs:
-    ax = axes1[row, col]
+for trial_name, left_data, right_data, idx in trial_configs:
+    ax = axes1[idx]
     ax.plot(dates_mmdd, left_data, 'bo-', label='Left', linewidth=2, markersize=6)
     ax.plot(dates_mmdd, right_data, 'ro-', label='Right', linewidth=2, markersize=6)
     ax.set_title(f'{trial_name} Trials', fontsize=14)
@@ -947,21 +332,21 @@ for trial_name, left_data, right_data, row, col in trial_configs:
 plt.tight_layout()
 plt.show()
 
-# =====================================================================
+#% =====================================================================
 # FIGURE 2: Combined Bar Plots
 # =====================================================================
 print("\nFIGURE 2: VISp Combined Comparison Plots")
-fig2, axes2 = plt.subplots(2, 2, figsize=(15, 8))
+fig2, axes2 = plt.subplots(4, 1, figsize=(20,16))
 fig2.suptitle(f'{mouse_id} - VISp Amplitudes and Differences', fontsize=16, fontweight='bold')
 
 x_pos = np.arange(len(dates_mmdd))
 
 # Top row: All trial types bar plots
 bar_width = 0.18
-colors = {'Hit': 'green', 'FA': 'red', 'CR': 'blue', 'Miss': 'orange'}
+colors = {'Hit': 'green', 'Miss': 'orange', 'FA': 'red', 'CR': 'blue'}
 
 # Top-left: Left VISp all trial types
-ax = axes2[0, 0]
+ax = axes2[0]
 for i, (trial_name, color) in enumerate(colors.items()):
     offset = (i - 1.5) * bar_width
     data = [amp_left_VISp_Hit, amp_left_VISp_FA, amp_left_VISp_CR, amp_left_VISp_Miss][i]
@@ -974,7 +359,7 @@ ax.set_xticks(x_pos)
 ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
 
 # Top-right: Right VISp all trial types
-ax = axes2[0, 1]
+ax = axes2[1]
 for i, (trial_name, color) in enumerate(colors.items()):
     offset = (i - 1.5) * bar_width
     data = [amp_right_VISp_Hit, amp_right_VISp_FA, amp_right_VISp_CR, amp_right_VISp_Miss][i]
@@ -990,7 +375,7 @@ ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
 bar_width_combined = 0.35  # Wider for two bars
 
 # Bottom-left: Combined Hit-Miss & FA-CR for Left VISp
-ax = axes2[1, 0]
+ax = axes2[2]
 bars1 = ax.bar(x_pos - bar_width_combined/2, diff_Hit_Miss_left, bar_width_combined, 
                label='Hit - Miss', color='purple', alpha=0.7, edgecolor='black')
 bars2 = ax.bar(x_pos + bar_width_combined/2, diff_FA_CR_left, bar_width_combined, 
@@ -1005,7 +390,7 @@ ax.set_xticks(x_pos)
 ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
 
 # Bottom-right: Combined Hit-Miss & FA-CR for Right VISp
-ax = axes2[1, 1]
+ax = axes2[3]
 bars1 = ax.bar(x_pos - bar_width_combined/2, diff_Hit_Miss_right, bar_width_combined, 
                label='Hit - Miss', color='magenta', alpha=0.7, edgecolor='black')
 bars2 = ax.bar(x_pos + bar_width_combined/2, diff_FA_CR_right, bar_width_combined, 
@@ -1023,19 +408,19 @@ plt.tight_layout()
 plt.show()
 
 # =====================================================================
-# FIGURE 3: Left-Right Differences (Line Plots)
+#% FIGURE 3: Left-Right Differences (Line Plots)
 # =====================================================================
 print("\nFIGURE 3: VISp Left-Right Differences")
-fig3, axes3 = plt.subplots(1, 2, figsize=(15, 5))
+fig3, axes3 = plt.subplots(2, 1, figsize=(20,8))
 fig3.suptitle(f'{mouse_id} - VISp Hemispheric Differences', fontsize=16, fontweight='bold')
 
 # Left: Simple Left-Right Difference
 ax = axes3[0]
 diff_configs = [
     ('Hit', diff_lr_VISp_Hit, 'green'),
+    ('Miss', diff_lr_VISp_Miss, 'orange'),
     ('FA', diff_lr_VISp_FA, 'red'),
-    ('CR', diff_lr_VISp_CR, 'blue'),
-    ('Miss', diff_lr_VISp_Miss, 'orange')
+    ('CR', diff_lr_VISp_CR, 'blue')
 ]
 
 for trial_name, data, color in diff_configs:
@@ -1074,132 +459,6 @@ ax.set_xticklabels(dates_mmdd, rotation=45, ha='right')
 plt.tight_layout()
 plt.show()
 
-#%%
-
-
-n_date = dates_ls.size
-stim_onset = 1.25 
-stim_duration = 3
-feedback_onset = 2.25
-diff_lr_VISp_Hit = np.zeros(n_date)
-diff_lr_VISp_FA = np.zeros(n_date)
-diff_lr_VISp_CR = np.zeros(n_date)
-diff_lr_VISp_Miss = np.zeros(n_date)
-amp_left_VISp_Hit = np.zeros(n_date)
-diff_lr_VISp_FA = np.zeros(n_date)
-diff_lr_VISp_CR = np.zeros(n_date)
-diff_lr_VISp_Miss = np.zeros(n_date)
-diff_lr_VISp_Hit = np.zeros(n_date)
-diff_lr_VISp_FA = np.zeros(n_date)
-diff_lr_VISp_CR = np.zeros(n_date)
-diff_lr_VISp_Miss = np.zeros(n_date)
-for i_date, date in enumerate(dates_ls):
-    #%
-    # date = date_ls[1]
-    # with open(ccf_json_path, 'r') as f:
-    #     ccf_data = json.load(f)
-    file_alignment = os.path.join(base_dir, mouse_id, date,'process/ccf_transform.json')#'widefield_alignment/wf_alignment_A095.pkl')
-    # Read a pickle file
-    # with open(file_alignment, 'rb') as f:  # 'rb' means read binary
-    #     data = load_pickle_safely(f)
-    with open(file_alignment, 'r') as f:
-        ccf_data = json.load(f)
-        
-    
-    # plot V1 to check the alignment 
-    n_region = len(ccf_data['ccf_regions'])   
-    # for i in range(n_region):
-    #     if ccf_data['ccf_regions'][i]['acronym']=='VISp':
-    #         print(i)
-    #         _data = ccf_data['ccf_regions'][i]
-    #         _left_x = np.array(_data['left_x'])
-    #         _left_y = np.array(_data['left_y'])
-    #         plt.plot(_left_x,_left_y,'.')
-    #         _right_x = np.array(_data['right_x'])
-    #         _right_y = np.array(_data['right_y'])
-    #         plt.plot(_right_x,_right_y,'.')
-    #         plt.axis('equal') 
-    #         plt.show()
-        
-    
-    
-#% 
-
-    #% generate eight dataframes: (Average, single trial) X (Hit, Miss, FA, CR)
-    
-    type_list = ['Hit','Miss', 'FA','CR']
-    wf_sf = 10 #Hz
-    stim_onset = 1.25 
-    idx_onset = int(stim_onset*wf_sf)
-    stim_duration = 3
-    feedback_onset = 2.25
-    
-    stim_onset_idx = int(stim_onset*wf_sf)
-    stim_offset_idx = int((stim_onset+stim_duration)*wf_sf)
-    
-    columns = []
-    for i in range(n_region):
-        region = ccf_data['ccf_regions'][i]['acronym']
-        columns.append(f"{region}_l")
-        columns.append(f"{region}_r")
-    
-    df_mean_ls = []   
-    for tp in type_list:     
-        _file_df = os.path.join(base_dir, mouse_id,date,mouse_id+'_'+date+'_dff_mean_df_'+tp+'.csv')
-        if os.path.exists(_file_df):
-            df_mean = pd.read_csv(_file_df) 
-        else:
-            _file_tif = os.path.join(base_dir, mouse_id,date, mouse_id+'_'+date+'_dff_mean_'+tp+'.tif')
-            if os.path.exists(_file_tif):
-                _dff = imread(_file_tif)
-                _dff_norm = norm_x(_dff)
-                _mean = np.mean(_dff_norm[:idx_onset,:,:],axis=0)
-                _sd = np.std(_dff_norm[:idx_onset,:,:],axis=0)
-                _dff_zs = np.zeros_like(_dff)
-                for i in range(_dff.shape[0]):
-                    _dff_zs[i,:,:] = (_dff_norm[i,:,:] -  _mean)/_sd 
-            else:
-                _dff_norm = np.zeros((53,512,512))
-            df_mean = pd.DataFrame(columns=columns)
-            for i in range(n_region):
-                _data = ccf_data['ccf_regions'][i]
-                region = _data['acronym']
-                _left_x = np.array(_data['left_x'])
-                _left_y = np.array(_data['left_y'])
-                _temporal_resp, _mask = extract_region_mean_response(_left_x,_left_y,_dff_norm)
-                _l = region+'_l'
-                df_mean[_l] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
-                
-                _right_x = np.array(_data['right_x'])
-                _right_y = np.array(_data['right_y'])
-                _temporal_resp, _mask = extract_region_mean_response(_right_x,_right_y,_dff_norm)
-                _r = region+'_r'
-                df_mean[_r] = (_temporal_resp-_temporal_resp[:idx_onset].mean())/_temporal_resp[:idx_onset].std()
-            df_mean.to_csv(_file_df,index=False)     
-        df_mean_ls.append(df_mean)
-        
-        _l = np.mean(df_mean['VISp_l'][stim_onset_idx:stim_offset_idx+1])
-        _r = np.mean(df_mean['VISp_r'][stim_onset_idx:stim_offset_idx+1])
-        if tp == 'Hit':
-            diff_lr_VISp_Hit[i_date] = (_l-_r)/(_l+_r)
-        if tp == 'FA':
-            diff_lr_VISp_FA[i_date] = (_l-_r)/(_l+_r)
-    
-    fig_file = os.path.join(base_dir, mouse_id,date,'fig_temporal_profiles')
-    if not os.path.exists(fig_file+'.png'):
-        plot_brain_region_temporal_profiles(df_mean_ls,type_list,fig_file=fig_file,title=mouse_id+':'+date)
-
-
-date_objects = pd.to_datetime(dates_ls, format='%Y%m%d')
-dates_mmdd = [d.strftime('%m%d') for d in date_objects]
-
-plt.plot(dates_mmdd ,diff_lr_VISp_Hit,'k*-')
-plt.title('Hit')
-plt.show()
-
-plt.plot(dates_mmdd,diff_lr_VISp_FA,'ro-')
-plt.title('FA')
-plt.show()
 #%%
 conditions = type_list
 results_latency = analyze_all_conditions(df_mean_ls, conditions, fs=10, measure='latency')
